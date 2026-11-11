@@ -1,0 +1,33 @@
+name: mixdown
+
+services:
+  mixdown:
+    build: .
+    image: mixdown:latest
+    container_name: mixdown
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env        # optional: copy .env.example to .env and edit
+        required: false
+
+    # Hardening: the app cannot write outside /data and /tmp, has no Linux
+    # capabilities, cannot gain privileges, and is capped on CPU, memory and
+    # process count.
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 3g
+    cpus: 3
+
+    volumes:
+      - mixdown-data:/data   # temporary files only; emptied automatically
+
+volumes:
+  mixdown-data:

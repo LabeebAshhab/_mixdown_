@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="Paste a YouTube link and get a properly tagged audio file with artwork and lyrics.">
+<title>Mixdown</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.4a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.300a4.900 4.900 0 0 0-1.300-3.400 4.600 4.600 0 0 0-.1-3.400s-1.100-.300-3.500 1.300a12 12 0 0 0-6.200 0C6.500 1.900 5.400 2.200 5.400 2.200a4.600 4.600 0 0 0-.1 3.400A4.900 4.900 0 0 0 4 9c0 4.900 3 6 5.800 6.300a3 3 0 0 0-.8 2.300V21"/></symbol>
+</svg>
+
+<div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<div class="app">
+  <header class="top">
+    <div class="brand" role="img" aria-label="Mixdown">
+      <span class="logo-mark" id="eq" aria-hidden="true">
+        <span class="logo-ring"></span><span class="logo-ring"></span>
+        <span class="logo-tile"></span>
+        <svg class="logo-note" viewBox="0 0 24 24">
+          <path d="M9.2 6.5 19 4.3v3L9.2 9.5z"/>
+          <path d="M9.2 17.4V6.5M19 15.2V4.3" fill="none" stroke-width="1.7" stroke-linecap="round"/>
+          <ellipse cx="6.9" cy="17.6" rx="2.9" ry="2.25" transform="rotate(-20 6.9 17.6)" stroke="none"/>
+          <ellipse cx="16.7" cy="15.4" rx="2.9" ry="2.25" transform="rotate(-20 16.7 15.4)" stroke="none"/>
+        </svg>
+      </span>
+      <span class="logo-word" aria-hidden="true"><span class="mix"><b>m</b><b>i</b><b>x</b></span><span class="down"><b>d</b><b>o</b><b>w</b><b>n</b></span></span>
+    </div>
+    <div class="top-right">
+      <div class="meter" id="meter" title="Space your finished files are using on the server">
+        <span id="meter-text">0 GB of 3 GB</span>
+        <span class="meter-bar"><i id="meter-fill"></i></span>
+      </div>
+      <button class="icon-btn" id="theme" type="button" aria-label="Switch between light and dark theme">
+        <svg class="icon sun"><use href="#i-sun"/></svg>
+        <svg class="icon moon"><use href="#i-moon"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="compose scroll" aria-label="Start a download">
+      <h1 id="greet">Hello. What are we listening to?</h1>
+      <p class="lead">Drop in a YouTube link and I'll bring it back as a proper music file, with the right title, album art and lyrics tucked inside.</p>
+
+      <form id="form" class="panel" novalidate>
+        <div class="link-row">
+          <input type="url" id="url" inputmode="url" placeholder="Paste a video or playlist link" autocomplete="off" spellcheck="false" maxlength="300" required>
+          <button class="primary" id="go" type="submit"><span>Get it</span></button>
+        </div>
+        <div class="alert" id="alert" role="alert" hidden></div>
+
+        <div class="field-label">Format</div>
+        <div class="formats" id="formats" role="radiogroup" aria-label="Output format"></div>
+        <p class="format-hint" id="format-hint"></p>
+
+        <div class="options" id="options"></div>
+
+        <div class="toggles">
+          <label class="switch"><input type="checkbox" id="opt-lyrics"><span class="track"></span><span>Add lyrics when I can find them</span></label>
+          <label class="switch"><input type="checkbox" id="opt-auto"><span class="track"></span><span>Download as soon as it's ready</span></label>
+          <label class="switch"><input type="checkbox" id="opt-album"><span class="track"></span><span>Treat a playlist as one album</span></label>
+        </div>
+      </form>
+
+      <p class="fineprint" id="fineprint"></p>
+    </section>
+
+    <section class="shelf" aria-label="Your music">
+      <div class="tabs" role="tablist">
+        <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="music">Your music</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="inspect">Inspect a file</button>
+      </div>
+
+      <div class="tab-panel scroll" id="panel-music" role="tabpanel">
+        <div class="empty" id="empty">
+          <svg class="icon big"><use href="#i-note"/></svg>
+          <p class="empty-title">It's quiet in here.</p>
+          <p>Paste a link on the left and your music will show up the moment it's ready.</p>
+        </div>
+        <div id="jobs"></div>
+      </div>
+
+      <div class="tab-panel scroll" id="panel-inspect" role="tabpanel" hidden>
+        <div class="panel">
+          <h2>What's inside this file?</h2>
+          <p class="muted">Drop an audio file (MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF or Matroska) and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
+          <div class="drop" id="drop" tabindex="0" role="button">
+            <svg class="icon big"><use href="#i-up"/></svg>
+            <span>Drop a file here, or click to choose one</span>
+          </div>
+          <input type="file" id="file" accept="audio/*,.flac,.m4a,.opus,.ogg,.wav,.aiff,.aif,.mp3,.dsf" hidden>
+          <div id="inspect-out"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Made with care by <strong id="credit-name"></strong></span>
+    <a id="credit-github" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
+    <a id="credit-website" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-globe"/></svg>Website</a>
+    <span class="foot-note">Only download what you have the right to.</span>
+  </footer>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<div class="lock" id="lock" hidden>
+  <form class="panel lock-box" id="lock-form">
+    <h2>This one's private</h2>
+    <p class="muted">Enter the password to come in.</p>
+    <input type="password" id="lock-pass" autocomplete="current-password" maxlength="200" required>
+    <div class="alert" id="lock-alert" role="alert" hidden></div>
+    <button class="primary" type="submit"><span>Unlock</span></button>
+  </form>
+</div>
+
+<script src="/app.js" defer></script>
+</body>
+</html>

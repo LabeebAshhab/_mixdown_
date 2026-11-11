@@ -1,0 +1,22 @@
+{
+  "name": "mixdown",
+  "version": "2.0.0",
+  "description": "Self-hosted web app: paste a YouTube link, get a tagged audio file with artwork and lyrics in FLAC, WAV, AIFF, ALAC, DSD, MP3, AAC, Opus or OGG.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.21.2",
+    "file-type": "^21.0.0",
+    "undici": "^7.10.0",
+    "zod": "^3.25.0"
+  }
+}
