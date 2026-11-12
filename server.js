@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './src/config.js';
 import { initStorage, shutdown } from './src/jobs.js';
@@ -26,6 +27,17 @@ async function checkTools() {
 app.use(securityHeaders);
 app.use(rateLimit(config.rate.global));
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
+
+// The page is one static file. Its link-preview tags need the site's full
+// address, so %ORIGIN% in it is replaced once, at start, with PUBLIC_URL (an
+// https origin checked in config.js, or nothing). No request data is involved.
+const page = (await fs.readFile(path.join(config.root, 'public', 'index.html'), 'utf8')).replaceAll('%ORIGIN%', config.publicUrl);
+app.get(['/', '/index.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(page));
+// The service worker is checked for updates on every visit.
+app.get('/sw.js', (_req, res, next) => {
+  res.set('Cache-Control', 'no-cache');
+  next();
+});
 app.use(express.static(path.join(config.root, 'public'), { dotfiles: 'ignore', index: 'index.html', maxAge: '5m' }));
 app.use('/api', noStore, session, sameOrigin, apiRouter({ ready: () => toolsReady }));
 app.use((_req, res) => res.status(404).type('text/plain').send('Not found'));

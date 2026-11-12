@@ -1,6 +1,7 @@
 'use strict';
 
 // ---------- tiny helpers ----------
+const { t, ts } = window.i18n;
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -35,27 +36,28 @@ const store = {
 };
 const fmtSize = (b) => (b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
 const fmtGb = (b) => (Math.round((b / 1073741824) * 10) / 10).toString();
-const fmtTime = (s) => (s ? Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0') : '');
+const fmtTime = (s) => (s ? Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0') : '');
 
 async function api(path, opts) {
   const res = await fetch(path, { credentials: 'same-origin', ...opts });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(data.error || 'Something went wrong. Please try again.');
+    const err = new Error(data.error || t('oops'));
     err.status = res.status;
     err.locked = !!data.locked;
     throw err;
   }
   return data;
 }
+const postJson = (path, body, method = 'POST') => api(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 function toast(message, bad) {
-  const t = el('div', 'toast' + (bad ? ' bad' : ''), message);
-  $('#toasts').append(t);
+  const node = el('div', 'toast' + (bad ? ' bad' : ''), message);
+  $('#toasts').append(node);
   setTimeout(() => {
-    t.classList.add('out');
-    setTimeout(() => t.remove(), 300);
+    node.classList.add('out');
+    setTimeout(() => node.remove(), 300);
   }, 4200);
 }
 
@@ -96,25 +98,26 @@ $('#theme').addEventListener('click', (event) => {
 });
 
 // ---------- greeting ----------
-(() => {
+function greet() {
   const h = new Date().getHours();
-  const hello = h < 5 ? 'Up late?' : h < 12 ? 'Good morning.' : h < 18 ? 'Good afternoon.' : 'Good evening.';
-  $('#greet').textContent = hello + ' What are we listening to?';
-})();
+  $('#greet').textContent = t(h < 5 ? 'upLate' : h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening') + ' ' + t('greetTail');
+}
+greet();
 
 // ---------- tabs ----------
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((t) => {
-      const on = t === tab;
-      t.classList.toggle('active', on);
-      t.setAttribute('aria-selected', String(on));
-      $('#panel-' + t.dataset.tab).hidden = !on;
+    document.querySelectorAll('.tab').forEach((other) => {
+      const on = other === tab;
+      other.classList.toggle('active', on);
+      other.setAttribute('aria-selected', String(on));
+      $('#panel-' + other.dataset.tab).hidden = !on;
     });
   });
 });
 
 // ---------- formats and their options ----------
+let boot = null;
 let formats = [];
 let current = null;
 
@@ -132,11 +135,11 @@ function renderOptions() {
   box.replaceChildren(
     ...current.options.map((opt) => {
       const wrap = el('label', 'opt');
-      wrap.append(el('span', null, opt.label));
+      wrap.append(el('span', null, ts(opt.label)));
       const select = el('select');
       select.dataset.option = opt.id;
       for (const v of opt.values) {
-        const o = el('option', null, v.label);
+        const o = el('option', null, ts(v.label));
         o.value = v.value;
         select.append(o);
       }
@@ -147,7 +150,7 @@ function renderOptions() {
       return wrap;
     }),
   );
-  $('#format-hint').textContent = current.hint || '';
+  $('#format-hint').textContent = ts(current.hint || '');
 }
 
 function readOptions() {
@@ -172,7 +175,7 @@ function renderFormats() {
         store.set('format', f.id);
         renderOptions();
       });
-      label.append(input, el('span', null, f.label));
+      label.append(input, el('span', null, ts(f.label)));
       return label;
     }),
   );
@@ -180,90 +183,337 @@ function renderFormats() {
 }
 
 // ---------- switches ----------
-for (const [id, def] of [['lyrics', '1'], ['auto', '1'], ['album', '0']]) {
+for (const [id, def] of [['lyrics', '1'], ['synced', '0'], ['normalize', '0'], ['auto', '1'], ['album', '0']]) {
   const box = $('#opt-' + id);
   box.checked = store.get('opt-' + id, def) === '1';
   box.addEventListener('change', () => store.set('opt-' + id, box.checked ? '1' : '0'));
 }
+// Synced lyrics only make sense when lyrics are wanted at all.
+const syncLyricsRow = () => ($('#row-synced').hidden = !$('#opt-lyrics').checked);
+$('#opt-lyrics').addEventListener('change', syncLyricsRow);
+syncLyricsRow();
+
+// ---------- the player ----------
+// One audio element for the whole page. It plays the small preview the server
+// makes next to each finished file, so every format can be heard in every
+// browser, including after the file itself has been downloaded.
+const player = new Audio();
+player.preload = 'none';
+let nowKey = null; // "job id/track index" of the track in the player
+
+function stopPlayer() {
+  player.pause();
+  player.removeAttribute('src');
+  nowKey = null;
+  paintPlayer();
+}
+
+function togglePlay(key) {
+  if (nowKey === key) {
+    if (player.paused) player.play().catch(() => {});
+    else player.pause();
+    return;
+  }
+  nowKey = key;
+  player.src = '/api/jobs/' + key.replace('/', '/preview/');
+  player.play().catch(() => {});
+  paintPlayer();
+}
+
+function paintSeek() {
+  const row = document.querySelector('.track.current');
+  if (!row) return;
+  const total = player.duration;
+  const fill = row.querySelector('.seek i');
+  if (fill) fill.style.transform = 'scaleX(' + (total ? Math.min(1, player.currentTime / total) : 0) + ')';
+  const time = row.querySelector('.seek-time');
+  if (time) time.textContent = (fmtTime(player.currentTime) || '0:00') + (total && isFinite(total) ? ' / ' + fmtTime(total) : '');
+}
+
+function paintPlayer() {
+  document.querySelectorAll('.track[data-key]').forEach((row) => {
+    const on = row.dataset.key === nowKey;
+    const live = on && !player.paused;
+    row.classList.toggle('current', on);
+    row.classList.toggle('playing', live);
+    const button = row.querySelector('.art-play');
+    if (button) button.setAttribute('aria-label', t(live ? 'pause' : 'play'));
+  });
+  paintSeek();
+}
+
+for (const name of ['play', 'pause', 'ended', 'emptied']) player.addEventListener(name, paintPlayer);
+player.addEventListener('timeupdate', paintSeek);
+player.addEventListener('durationchange', paintSeek);
+player.addEventListener('error', () => nowKey && stopPlayer());
+
+// ---------- the tag editor ----------
+// Opens under a finished track. The file's tags are written again on the
+// server (the audio is copied, not converted a second time).
+let editor = null; // { jobId, key, node }
+
+function closeEditor(redraw) {
+  if (!editor) return;
+  const card = cards.get(editor.jobId);
+  editor.node.remove();
+  editor = null;
+  if (card && redraw) card.sig = '';
+}
+
+function openEditor(job, index, track, row) {
+  const key = job.id + '/' + index;
+  if (editor && editor.key === key) return closeEditor(true);
+  closeEditor(false);
+
+  const m = track.meta || {};
+  const start = {
+    title: m.title || track.title || '',
+    artist: m.artist || '',
+    album: m.album || '',
+    albumArtist: m.albumArtist || '',
+    year: m.year ? String(m.year) : '',
+    track: m.track ? String(m.track) : '',
+    trackTotal: m.trackTotal ? String(m.trackTotal) : '',
+    genre: m.genre || '',
+  };
+  const form = el('form', 'editor');
+  form.noValidate = true;
+  const inputs = {};
+  const field = (name, cls, attrs) => {
+    const label = el('label', 'ed ' + cls);
+    label.append(el('span', null, t('f' + name[0].toUpperCase() + name.slice(1))));
+    const input = el('input');
+    input.type = 'text';
+    input.value = start[name];
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    Object.assign(input, attrs);
+    inputs[name] = input;
+    label.append(input);
+    return label;
+  };
+  const numeric = { inputMode: 'numeric', maxLength: 4 };
+  const trackOf = field('trackTotal', 'tiny', { ...numeric, maxLength: 3 });
+  trackOf.firstChild.textContent = t('fOf');
+  const grid = el('div', 'ed-grid');
+  grid.append(
+    field('title', 'wide', { maxLength: 200, required: true }),
+    field('artist', 'half', { maxLength: 200 }),
+    field('album', 'half', { maxLength: 200 }),
+    field('albumArtist', 'half', { maxLength: 200 }),
+    field('genre', 'half', { maxLength: 60 }),
+    field('year', 'tiny', numeric),
+    field('track', 'tiny', { ...numeric, maxLength: 3 }),
+    trackOf,
+  );
+
+  const note = el('p', 'ed-note');
+  note.hidden = true;
+  const say = (text, bad) => {
+    note.textContent = text || '';
+    note.hidden = !text;
+    note.classList.toggle('err', !!bad);
+  };
+
+  const file = el('input');
+  file.type = 'file';
+  file.accept = 'image/jpeg,image/png,image/webp';
+  file.hidden = true;
+  const find = el('button', 'quiet', t('findAgain'));
+  find.type = 'button';
+  const pick = el('button', 'quiet', t('chooseCover'));
+  pick.type = 'button';
+  const cancel = el('button', 'quiet', t('cancel'));
+  cancel.type = 'button';
+  const save = el('button', 'btn', t('save'));
+  save.type = 'submit';
+  const buttons = el('div', 'ed-buttons');
+  const gap = el('span', 'ed-gap');
+  buttons.append(find, pick, file, gap, cancel, save);
+  form.append(grid, note, buttons);
+
+  let suggested = false; // the last lookup found album art, kept on the server
+  const busy = (on) => [find, pick, cancel, save].forEach((b) => (b.disabled = on));
+  const where = '/api/jobs/' + job.id + '/tracks/' + index;
+
+  pick.addEventListener('click', () => file.click());
+  file.addEventListener('change', () => {
+    const chosen = file.files[0];
+    if (chosen && chosen.size > boot.limits.maxCoverBytes) {
+      file.value = '';
+      return say(t('coverTooBig', { mb: Math.round(boot.limits.maxCoverBytes / 1048576) }), true);
+    }
+    say(chosen ? t('coverChosen', { name: chosen.name }) : '');
+  });
+  cancel.addEventListener('click', () => {
+    closeEditor(true);
+    refresh();
+  });
+
+  find.addEventListener('click', async () => {
+    busy(true);
+    say(t('finding'));
+    try {
+      const found = await postJson(where + '/lookup', { title: inputs.title.value.trim(), artist: inputs.artist.value.trim() });
+      for (const [name, input] of Object.entries(inputs)) input.value = found.tags[name] == null ? '' : String(found.tags[name]);
+      suggested = found.cover;
+      say(t('foundOn', { source: found.source }) + (found.cover ? ' ' + t('foundCover') : ''));
+    } catch (err) {
+      say(err.message, true);
+    } finally {
+      busy(false);
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const now = Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, input.value.trim()]));
+    const count = (v) => (/^\d{1,3}$/.test(v) && Number(v) > 0 ? Number(v) : null);
+    const body = { ...now, year: /^\d{4}$/.test(now.year) ? now.year : '', track: count(now.track), trackTotal: count(now.trackTotal), suggestedCover: suggested && !file.files[0] };
+    const changed = Object.keys(start).some((name) => start[name] !== now[name]) || body.suggestedCover;
+    if (!changed && !file.files[0]) {
+      closeEditor(true);
+      return refresh();
+    }
+    busy(true);
+    say(t('saving'));
+    try {
+      if (file.files[0]) await api(where + '/cover', { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file.files[0] });
+      if (changed) await postJson(where, body, 'PATCH');
+      closeEditor(true);
+      toast(t('saved'));
+      refresh();
+    } catch (err) {
+      busy(false);
+      say(err.message, true);
+    }
+  });
+
+  editor = { jobId: job.id, key, node: form };
+  row.after(form);
+  inputs.title.focus();
+}
 
 // ---------- job list ----------
-const WORKING = { queued: 'Waiting for its turn…', tagging: 'Finding the album, artwork and lyrics…', converting: 'Converting and tagging…' };
-const statusText = (t) => (t.status === 'downloading' ? 'Fetching the audio… ' + t.progress + '%' : WORKING[t.status] || '');
+const statusText = (tr) => (tr.status === 'downloading' ? t('downloading', { n: tr.progress }) : ['queued', 'tagging', 'converting'].includes(tr.status) ? t(tr.status) : '');
 
-function trackNode(job, t, i) {
+function trackNode(job, tr, i) {
+  const key = job.id + '/' + i;
   const row = el('div', 'track');
   row.dataset.track = i;
+  row.dataset.key = key;
 
   const art = el('div', 'art');
-  if (t.cover) {
+  if (tr.cover) {
     const img = el('img');
-    img.src = '/api/jobs/' + job.id + '/cover/' + i;
+    img.src = '/api/jobs/' + job.id + '/cover/' + i + '?v=' + tr.cover;
     img.alt = '';
     art.append(img);
   } else {
     art.append(icon('note'));
   }
+  if (tr.preview) {
+    const play = el('button', 'art-play');
+    play.type = 'button';
+    play.append(icon('play', 'when-paused'), icon('pause', 'when-playing'));
+    play.addEventListener('click', () => togglePlay(key));
+    art.append(play);
+  }
   row.append(art);
 
   const body = el('div', 'track-body');
-  body.append(el('div', 'track-title', t.title));
-  const m = t.meta;
+  body.append(el('div', 'track-title', tr.title));
+  const m = tr.meta;
 
-  if (t.status === 'error') {
-    body.append(el('div', 'track-sub err', t.error || 'That one did not work.'));
-  } else if (t.status === 'collected') {
+  if (tr.status === 'error') {
+    body.append(el('div', 'track-sub err', tr.error || t('trackError')));
+  } else if (tr.status === 'collected') {
     const saved = el('div', 'track-sub saved');
-    saved.append(icon('check'), 'Downloaded and removed from the server');
+    saved.append(icon('check'), t('collected'));
     body.append(saved);
-  } else if (t.status === 'done' && m) {
-    const trackNo = m.track ? 'track ' + m.track + (m.trackTotal ? '/' + m.trackTotal : '') : null;
-    body.append(el('div', 'track-sub', [m.artist, m.album, m.year, trackNo, m.genre].filter(Boolean).join(' · ') || 'No artist found'));
+  } else if (tr.status === 'done' && m) {
+    const trackNo = m.track ? t('trackNo', { n: m.track + (m.trackTotal ? '/' + m.trackTotal : '') }) : null;
+    body.append(el('div', 'track-sub', [m.artist, m.album, m.year, trackNo, m.genre].filter(Boolean).join(' · ') || t('noArtist')));
     const chips = el('div', 'chips');
     const add = (text, cls) => text && chips.append(el('span', 'chip' + (cls ? ' ' + cls : ''), text));
-    const matched = t.match && t.match.source !== 'YouTube';
+    const match = tr.match || {};
     add([m.container, m.codec].filter(Boolean).join(' / '));
     add(m.sampleRate && (m.sampleRate >= 1000000 ? (m.sampleRate / 1000000).toFixed(1) + ' MHz' : m.sampleRate / 1000 + ' kHz'));
     add(m.bitsPerSample && m.bitsPerSample + '-bit');
     add(fmtTime(m.duration));
-    add(fmtSize(t.size));
-    add(matched ? 'matched on ' + t.match.source : t.match && t.match.lookupFailed ? 'lookup failed, try again' : 'no catalogue match', matched ? 'ok' : 'warn');
-    add(m.cover ? 'artwork' : null, 'ok');
-    add(m.lyrics ? 'lyrics' : null, 'ok');
+    add(fmtSize(tr.size));
+    if (match.edited) add(t('edited'), 'ok');
+    else add(match.matched ? t('matchedOn', { source: match.source }) : match.lookupFailed ? t('lookupFailed') : t('noMatch'), match.matched ? 'ok' : 'warn');
+    add(m.cover ? t('artwork') : null, 'ok');
+    add(m.lyrics ? t(tr.lrc ? 'syncedLyrics' : 'lyrics') : null, 'ok');
+    add(tr.gain ? t('levelled', { db: (tr.gain > 0 ? '+' : '−') + Math.abs(tr.gain).toFixed(1) }) : null);
     body.append(chips);
   } else {
-    body.append(el('div', 'track-sub pct', statusText(t)));
+    body.append(el('div', 'track-sub pct', statusText(tr)));
     const bar = el('div', 'bar');
     const fill = el('i');
-    fill.style.width = t.progress + '%';
+    fill.style.width = tr.progress + '%';
     bar.append(fill);
     body.append(bar);
   }
+  if (tr.preview) {
+    // Shown only for the track in the player: where it is, and click to jump.
+    const seekRow = el('div', 'seek-row');
+    const seek = el('div', 'seek');
+    seek.append(el('i'));
+    seek.addEventListener('click', (e) => {
+      const box = seek.getBoundingClientRect();
+      if (nowKey === key && player.duration) player.currentTime = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * player.duration;
+    });
+    seekRow.append(seek, el('span', 'seek-time'));
+    body.append(seekRow);
+  }
   row.append(body);
 
-  if (t.ready) {
+  const actions = el('div', 'track-actions');
+  if (tr.editable) {
+    const edit = el('button', 'ghost');
+    edit.type = 'button';
+    edit.title = t('edit');
+    edit.setAttribute('aria-label', t('edit'));
+    edit.append(icon('pen'));
+    edit.addEventListener('click', () => openEditor(job, i, tr, row));
+    actions.append(edit);
+  }
+  if (tr.lrc) {
+    const lrc = el('a', 'ghost');
+    lrc.href = '/api/jobs/' + job.id + '/lrc/' + i;
+    lrc.setAttribute('download', '');
+    lrc.title = t('lrc');
+    lrc.setAttribute('aria-label', t('lrc'));
+    lrc.append(icon('lines'));
+    actions.append(lrc);
+  }
+  if (tr.ready) {
     const a = el('a', 'btn');
     a.href = '/api/jobs/' + job.id + '/files/' + i;
     a.setAttribute('download', '');
-    a.append(icon('down'), 'Download');
-    row.append(a);
+    a.append(icon('down'), t('download'));
+    actions.append(a);
   }
+  if (actions.childElementCount) row.append(actions);
   return row;
 }
 
 function jobContent(job) {
   const head = el('div', 'job-head');
   head.append(el('div', 'job-title', job.title), el('span', 'badge', job.format));
-  if (job.tracks.filter((t) => t.ready).length > 1) {
+  if (job.tracks.filter((tr) => tr.ready).length > 1) {
     const zip = el('a', 'btn');
     zip.href = '/api/jobs/' + job.id + '/zip';
     zip.setAttribute('download', '');
-    zip.append(icon('down'), 'Download all');
+    zip.append(icon('down'), t('downloadAll'));
     head.append(zip);
   }
   const rm = el('button', 'ghost');
   rm.type = 'button';
-  rm.setAttribute('aria-label', 'Remove');
-  rm.title = 'Remove';
+  rm.setAttribute('aria-label', t('remove'));
+  rm.title = t('remove');
   rm.append(icon('x'));
   rm.addEventListener('click', async () => {
     await api('/api/jobs/' + job.id, { method: 'DELETE' }).catch(() => {});
@@ -273,10 +523,10 @@ function jobContent(job) {
 
   const out = [head];
   if (!job.tracks.length) {
-    out.push(el('div', 'job-note' + (job.status === 'error' ? ' err' : ''), job.status === 'error' ? job.error : job.status === 'queued' ? 'In the queue…' : 'Taking a look at your link…'));
+    out.push(el('div', 'job-note' + (job.status === 'error' ? ' err' : ''), job.status === 'error' ? job.error : job.status === 'queued' ? t('inQueue') : t('looking')));
   }
-  job.tracks.forEach((t, i) => out.push(trackNode(job, t, i)));
-  if (job.expiresAt && job.tracks.some((t) => t.ready)) out.push(el('div', 'job-note expiry'));
+  job.tracks.forEach((tr, i) => out.push(trackNode(job, tr, i)));
+  if (job.expiresAt && job.tracks.some((tr) => tr.ready)) out.push(el('div', 'job-note expiry'));
   return out;
 }
 
@@ -288,42 +538,48 @@ function syncJobs(jobs) {
   jobs.forEach((job, index) => {
     seen.add(job.id);
     // Everything except the moving progress numbers decides whether to redraw.
-    const sig = JSON.stringify({ ...job, tracks: job.tracks.map((t) => ({ ...t, progress: 0 })) });
+    const sig = JSON.stringify({ ...job, tracks: job.tracks.map((tr) => ({ ...tr, progress: 0 })) });
     let card = cards.get(job.id);
     if (!card) {
       card = { node: el('article', 'job enter'), sig: '' };
       cards.set(job.id, card);
     }
-    if (card.sig !== sig) {
+    // A card with the tag editor open is left alone until the editor closes.
+    if (card.sig !== sig && !(editor && editor.jobId === job.id)) {
       card.sig = sig;
       card.node.replaceChildren(...jobContent(job));
     }
-    job.tracks.forEach((t, i) => {
+    job.tracks.forEach((tr, i) => {
       const row = card.node.querySelector('[data-track="' + i + '"]');
       const fill = row && row.querySelector('.bar i');
-      if (fill) fill.style.width = t.progress + '%';
+      if (fill) fill.style.width = tr.progress + '%';
       const pct = row && row.querySelector('.pct');
-      if (pct) pct.textContent = statusText(t);
+      if (pct) pct.textContent = statusText(tr);
     });
     const expiry = card.node.querySelector('.expiry');
     if (expiry) {
       const mins = Math.max(0, Math.ceil((job.expiresAt - Date.now()) / 60000));
-      expiry.textContent = mins > 1 ? 'Waiting for you for ' + mins + ' more minutes.' : 'About to be cleared. Grab it now.';
+      expiry.textContent = mins > 1 ? t('expiry', { n: mins }) : t('expirySoon');
     }
     if (list.children[index] !== card.node) list.insertBefore(card.node, list.children[index] || null);
   });
   for (const [id, card] of cards) {
     if (seen.has(id)) continue;
     cards.delete(id);
+    if (editor && editor.jobId === id) editor = null;
+    if (nowKey && nowKey.startsWith(id + '/')) stopPlayer();
     card.node.classList.add('leave');
     setTimeout(() => card.node.remove(), 260);
   }
   $('#empty').hidden = jobs.length > 0;
+  paintPlayer();
 }
 
-function syncMeter(usage) {
+let usage = null;
+function syncMeter(next) {
+  usage = next;
   const pct = Math.min(100, (usage.used / usage.quota) * 100);
-  $('#meter-text').textContent = (usage.used ? fmtSize(usage.used) : '0') + ' of ' + fmtGb(usage.quota) + ' GB waiting';
+  $('#meter-text').textContent = t('meter', { used: usage.used ? fmtSize(usage.used) : '0', quota: fmtGb(usage.quota) });
   $('#meter-fill').style.width = pct + '%';
   $('#meter').classList.toggle('full', pct >= 100);
 }
@@ -335,7 +591,7 @@ function autoDownload(jobs) {
   for (const job of jobs) {
     if (!mine.has(job.id) || (job.status !== 'done' && job.status !== 'error')) continue;
     mine.delete(job.id);
-    const ready = job.tracks.map((t, i) => (t.ready ? i : -1)).filter((i) => i >= 0);
+    const ready = job.tracks.map((tr, i) => (tr.ready ? i : -1)).filter((i) => i >= 0);
     if (!ready.length || !$('#opt-auto').checked) continue;
     const a = el('a');
     a.href = ready.length > 1 ? '/api/jobs/' + job.id + '/zip' : '/api/jobs/' + job.id + '/files/' + ready[0];
@@ -343,7 +599,21 @@ function autoDownload(jobs) {
     document.body.append(a);
     a.click();
     a.remove();
-    toast(ready.length > 1 ? 'Your playlist is on its way.' : 'Your song is on its way.');
+    toast(ready.length > 1 ? t('toastPlaylist') : t('toastSong'));
+  }
+}
+
+// The official album art of finished songs joins the tiles drifting behind
+// the glass (backdrop.js). Video thumbnails are left out. Oldest job first, so
+// the newest song ends up at the front.
+function collectCovers(jobs) {
+  for (const job of [...jobs].reverse()) {
+    job.tracks.forEach((tr, i) => {
+      if (!tr.cover || !tr.meta || (tr.status !== 'done' && tr.status !== 'collected')) return;
+      if (!/album art$/.test((tr.match && tr.match.cover) || '')) return;
+      const album = [tr.meta.artist, tr.meta.album || tr.title].join(' | ').toLowerCase();
+      window.backdrop.remember(job.id + '/' + i + '/' + tr.cover, album, '/api/jobs/' + job.id + '/cover/' + i + '?v=' + tr.cover);
+    });
   }
 }
 
@@ -352,10 +622,13 @@ async function refresh() {
   clearTimeout(timer);
   let busy = false;
   try {
-    const data = await api('/api/jobs');
+    // Naming the job being listened to keeps it on the server while it plays.
+    const listening = nowKey && !player.paused ? '?playing=' + nowKey.split('/')[0] : '';
+    const data = await api('/api/jobs' + listening);
     syncJobs(data.jobs);
     syncMeter(data.usage);
     autoDownload(data.jobs);
+    collectCovers(data.jobs);
     busy = data.jobs.some((j) => j.status === 'queued' || j.status === 'running');
     $('#eq').classList.toggle('live', busy);
   } catch (err) {
@@ -364,25 +637,106 @@ async function refresh() {
   timer = setTimeout(refresh, busy ? 1500 : 5000);
 }
 
-// ---------- submit ----------
+// ---------- links, several links, or a song name ----------
+const LINK = /^(?:https?:\/\/)?(?:[\w-]+\.)*(?:youtube\.com|youtu\.be|youtube-nocookie\.com|soundcloud\.com)\/\S/i;
+
+/** What was typed: one or more links, or words to search for. */
+function readInput(text) {
+  const links = text
+    .split(/\s+/)
+    .filter((w) => LINK.test(w))
+    .map((w) => (/^https?:\/\//i.test(w) ? w : 'https://' + w));
+  return links.length ? { links: [...new Set(links)] } : { query: text.trim().replace(/\s+/g, ' ') };
+}
+
+const input = $('#url');
+const paintButton = () => ($('#go-text').textContent = t(input.value.trim() && !readInput(input.value).links ? 'goSearch' : 'go'));
+input.addEventListener('input', () => {
+  paintButton();
+  showAlert('#alert', '');
+});
+// A single-line field drops line breaks, which would glue pasted links
+// together. Turn them into spaces instead.
+input.addEventListener('paste', (e) => {
+  const text = e.clipboardData && e.clipboardData.getData('text');
+  if (!text || !/[\r\n]/.test(text)) return;
+  e.preventDefault();
+  const clean = text.split(/\s+/).filter(Boolean).join(' ');
+  input.setRangeText(clean, input.selectionStart, input.selectionEnd, 'end');
+  paintButton();
+});
+
+function hideResults() {
+  $('#results').hidden = true;
+  $('#results').replaceChildren();
+}
+
+async function startJob(urls) {
+  const body = {
+    format: current.id,
+    options: readOptions(),
+    album: $('#opt-album').checked,
+    lyrics: $('#opt-lyrics').checked,
+    synced: $('#opt-lyrics').checked && $('#opt-synced').checked,
+    normalize: $('#opt-normalize').checked,
+  };
+  if (urls.length > 1) body.urls = urls;
+  else body.url = urls[0];
+  const job = await postJson('/api/jobs', body);
+  mine.add(job.id);
+  input.value = '';
+  paintButton();
+  hideResults();
+  document.querySelector('.tab[data-tab="music"]').click();
+  refresh();
+}
+
+async function search(query) {
+  const box = $('#results');
+  box.hidden = false;
+  box.replaceChildren(el('p', 'results-note', t('searching')));
+  const { results } = await api('/api/search?q=' + encodeURIComponent(query));
+  if (!results.length) return box.replaceChildren(el('p', 'results-note', t('noResults')));
+  const head = el('div', 'results-head');
+  const close = el('button', 'ghost');
+  close.type = 'button';
+  close.setAttribute('aria-label', t('close'));
+  close.append(icon('x'));
+  close.addEventListener('click', hideResults);
+  head.append(el('span', null, t('pick')), close);
+  box.replaceChildren(
+    head,
+    ...results.map((r) => {
+      const item = el('button', 'result');
+      item.type = 'button';
+      item.append(el('span', 'result-title', r.title), el('span', 'result-sub', [r.by, fmtTime(r.duration)].filter(Boolean).join(' · ')));
+      item.addEventListener('click', async () => {
+        box.querySelectorAll('button').forEach((b) => (b.disabled = true));
+        try {
+          await startJob([r.url]);
+        } catch (err) {
+          showAlert('#alert', err.message);
+          box.querySelectorAll('button').forEach((b) => (b.disabled = false));
+        }
+      });
+      return item;
+    }),
+  );
+}
+
 $('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showAlert('#alert', '');
-  const url = $('#url').value.trim();
-  if (!url) return showAlert('#alert', 'Paste a YouTube link first.');
+  const typed = readInput(input.value);
+  if (!typed.links && !typed.query) return showAlert('#alert', t('needLink'));
+  if (typed.links && typed.links.length > boot.limits.maxLinks) return showAlert('#alert', t('tooManyLinks', { n: boot.limits.maxLinks }));
   const btn = $('#go');
   btn.disabled = true;
   try {
-    const job = await api('/api/jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, format: current.id, options: readOptions(), album: $('#opt-album').checked, lyrics: $('#opt-lyrics').checked }),
-    });
-    mine.add(job.id);
-    $('#url').value = '';
-    document.querySelector('.tab[data-tab="music"]').click();
-    refresh();
+    if (typed.links) await startJob(typed.links);
+    else await search(typed.query.slice(0, 100));
   } catch (err) {
+    hideResults();
     showAlert('#alert', err.message);
   } finally {
     btn.disabled = false;
@@ -395,7 +749,7 @@ function showInspect(name, d) {
   if (d.picture && d.picture.dataUrl) {
     const img = el('img');
     img.src = d.picture.dataUrl;
-    img.alt = 'Embedded artwork';
+    img.alt = t('embeddedArt');
     head.append(img);
   }
   const info = el('div');
@@ -420,23 +774,23 @@ function showInspect(name, d) {
     table.append(tr);
   };
   const f = d.format;
-  section('Audio');
-  row('Container', f.container);
-  row('Codec', f.codec);
-  row('Lossless', f.lossless == null ? null : f.lossless ? 'yes' : 'no');
-  row('Sample rate', f.sampleRate && f.sampleRate + ' Hz');
-  row('Bit depth', f.bitsPerSample && f.bitsPerSample + '-bit');
-  row('Channels', f.numberOfChannels);
-  row('Bitrate', f.bitrate && Math.round(f.bitrate / 1000) + ' kbps');
-  row('Duration', fmtTime(f.duration));
-  row('Tag formats', f.tagTypes);
-  row('Artwork', d.picture ? d.picture.format + ', ' + fmtSize(d.picture.bytes) : 'none');
-  section('Tags');
+  section(t('secAudio'));
+  row(t('container'), f.container);
+  row(t('codec'), f.codec);
+  row(t('lossless'), f.lossless == null ? null : t(f.lossless ? 'yes' : 'no'));
+  row(t('sampleRate'), f.sampleRate && f.sampleRate + ' Hz');
+  row(t('bitDepth'), f.bitsPerSample && f.bitsPerSample + '-bit');
+  row(t('channels'), f.numberOfChannels);
+  row(t('bitrate'), f.bitrate && Math.round(f.bitrate / 1000) + ' kbps');
+  row(t('duration'), fmtTime(f.duration));
+  row(t('tagFormats'), f.tagTypes);
+  row(t('artworkRow'), d.picture ? d.picture.format + ', ' + fmtSize(d.picture.bytes) : t('none'));
+  section(t('secTags'));
   for (const [k, v] of Object.entries(d.tags)) row(k, v);
   for (const [type, list] of Object.entries(d.raw || {})) {
     if (!list.length) continue;
-    section('Raw ' + type);
-    for (const t of list) row(t.id, t.value);
+    section(t('secRaw', { type }));
+    for (const item of list) row(item.id, item.value);
   }
   $('#inspect-out').replaceChildren(head, table);
 }
@@ -444,7 +798,7 @@ function showInspect(name, d) {
 async function inspectFile(file) {
   if (!file) return;
   const out = $('#inspect-out');
-  out.replaceChildren(el('p', 'job-note', 'Reading ' + file.name + '…'));
+  out.replaceChildren(el('p', 'job-note', t('reading', { name: file.name })));
   try {
     showInspect(file.name, await api('/api/inspect', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }));
   } catch (err) {
@@ -453,17 +807,17 @@ async function inspectFile(file) {
 }
 {
   const drop = $('#drop');
-  const input = $('#file');
-  drop.addEventListener('click', () => input.click());
+  const file = $('#file');
+  drop.addEventListener('click', () => file.click());
   drop.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      input.click();
+      file.click();
     }
   });
-  input.addEventListener('change', () => {
-    inspectFile(input.files[0]);
-    input.value = '';
+  file.addEventListener('change', () => {
+    inspectFile(file.files[0]);
+    file.value = '';
   });
   drop.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -486,7 +840,7 @@ $('#lock-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showAlert('#lock-alert', '');
   try {
-    await api('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('#lock-pass').value }) });
+    await postJson('/api/login', { password: $('#lock-pass').value });
     $('#lock-pass').value = '';
     $('#lock').hidden = true;
     refresh();
@@ -495,26 +849,70 @@ $('#lock-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ---------- language ----------
+function paintStatic() {
+  greet();
+  paintButton();
+  if (!boot) return;
+  $('#fineprint').textContent =
+    t('fineprint', { min: boot.limits.ttlMinutes, gb: fmtGb(boot.limits.quotaBytes) }) + ' ' + t('sitesNote', { sites: boot.sites.join(', ') });
+  renderFormats();
+  if (usage) syncMeter(usage);
+}
+{
+  const select = $('#lang');
+  for (const [code, name] of Object.entries(window.i18n.names)) {
+    const o = el('option', null, name);
+    o.value = code;
+    select.append(o);
+  }
+  select.value = window.i18n.lang;
+  select.addEventListener('change', () => {
+    window.i18n.set(select.value);
+    paintStatic();
+    closeEditor(false);
+    for (const card of cards.values()) card.sig = ''; // redraw every card in the new language
+    refresh();
+  });
+}
+
+// ---------- a link handed over by another app ----------
+// Installed as an app, Mixdown appears in the phone's Share menu (see
+// manifest.webmanifest): the shared text arrives in the address. It is only
+// placed in the field. Nothing starts until the visitor presses the button,
+// so a link to this page can never start a download on someone's behalf.
+function takeSharedLink() {
+  const params = new URLSearchParams(location.search);
+  const shared = ['url', 'text', 'title'].map((k) => params.get(k) || '').join(' ').slice(0, 4000);
+  if (!params.has('url') && !params.has('text') && !params.has('title')) return;
+  history.replaceState(null, '', location.pathname);
+  const typed = readInput(shared);
+  if (!typed.links) return;
+  input.value = typed.links.slice(0, boot.limits.maxLinks).join(' ');
+  paintButton();
+  toast(t('shared'));
+}
+
 // ---------- start ----------
 (async () => {
-  let boot;
   try {
     boot = await api('/api/bootstrap');
   } catch {
-    return showAlert('#alert', "I can't reach the server right now. Refresh in a moment.");
+    return showAlert('#alert', t('noServer'));
   }
   formats = boot.formats;
-  renderFormats();
+  paintStatic();
 
   $('#credit-name').textContent = boot.credits.name;
   $('#credit-github').href = boot.credits.github;
   $('#credit-website').href = boot.credits.website;
-  $('#fineprint').textContent =
-    'Finished files wait for you for ' + boot.limits.ttlMinutes + ' minutes and are deleted from the server the moment you download them. ' +
-    'You can have up to ' + fmtGb(boot.limits.quotaBytes) + ' GB waiting at a time; download and the space is yours again.';
   syncMeter({ used: 0, quota: boot.limits.quotaBytes });
+  takeSharedLink();
 
-  if (!boot.ready) showAlert('#alert', 'The server is missing yt-dlp or ffmpeg, so downloads will not work yet.');
+  if (!boot.ready) showAlert('#alert', t('missingTools'));
   if (boot.locked && !boot.unlocked) return showLock();
   refresh();
 })();
+
+// Lets the browser offer "Install", and opens the page shell when offline.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

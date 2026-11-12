@@ -9,8 +9,10 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
-const [ffmpeg, input, output, mult] = process.argv.slice(2);
+const [ffmpeg, input, output, mult, gain] = process.argv.slice(2);
 if (!ffmpeg || !input || !output) process.exit(2);
+// Optional loudness correction in dB, worked out by the pipeline (a plain number).
+const gainDb = Number.isFinite(Number(gain)) && gain !== undefined && gain !== '' ? Number(gain) : 0;
 
 const DSD_RATE = 44100 * (mult === '128' ? 128 : 64);
 const UP = 8; // interpolation done here
@@ -178,7 +180,7 @@ function finish() {
 
 const ff = spawn(
   ffmpeg,
-  ['-nostdin', '-v', 'error', '-i', input, '-vn', '-ac', '2', '-ar', String(PCM_RATE), '-f', 'f32le', '-'],
+  ['-nostdin', '-v', 'error', '-i', input, '-vn', ...(gainDb ? ['-af', `volume=${gainDb.toFixed(2)}dB`] : []), '-ac', '2', '-ar', String(PCM_RATE), '-f', 'f32le', '-'],
   { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] },
 );
 

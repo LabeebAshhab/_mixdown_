@@ -22,15 +22,20 @@ export function usageFor(ip) {
   return sum;
 }
 
+/** Everything on disk, including the small previews the in-page player uses. */
 function totalUsage() {
   let sum = 0;
-  for (const job of jobs.values()) for (const t of job.tracks) if (t.file) sum += t.size || 0;
+  for (const job of jobs.values()) for (const t of job.tracks) sum += (t.file ? t.size || 0 : 0) + (t.previewFile ? t.previewSize || 0 : 0);
   return sum;
 }
 
 // ------------------------------------------------------------ queue
 
-export function createJob({ sid, ip, source, format, options, asAlbum, wantLyrics }) {
+/**
+ * @param {{sources: {site: string, kind: string, id: string, url: string}[]}} o
+ *   one checked link (a song or a playlist), or several songs pasted together
+ */
+export function createJob({ sid, ip, sources, format, options, asAlbum, wantLyrics, syncedLyrics, normalize }) {
   if (usageFor(ip) >= config.quotaBytes) {
     throw new PublicError(`You have ${gb(config.quotaBytes)} waiting. Download your files to free up space, then carry on.`, 409);
   }
@@ -42,19 +47,22 @@ export function createJob({ sid, ip, source, format, options, asAlbum, wantLyric
   if (pending.length >= config.maxQueued) throw new PublicError('The queue is full right now. Try again in a minute.', 503);
 
   const id = randomUUID();
+  const kind = sources.length > 1 ? 'batch' : sources[0].kind;
   const job = {
     id,
     sid,
     ip,
-    kind: source.kind,
-    sourceId: source.id,
-    url: source.url,
+    kind,
+    site: sources[0].site,
+    sources,
     format,
     options,
     asAlbum,
     wantLyrics,
+    syncedLyrics: !!(wantLyrics && syncedLyrics),
+    normalize: !!normalize,
     status: 'queued',
-    title: source.kind === 'playlist' ? 'Playlist' : 'Loading…',
+    title: kind === 'playlist' ? 'Playlist' : kind === 'batch' ? `${sources.length} songs` : 'Loading…',
     tracks: [],
     createdAt: Date.now(),
     finishedAt: null,
@@ -137,9 +145,19 @@ export async function collectTrack(job, track) {
   track.status = 'collected';
   await fs.rm(insideDir(job.dir, file), { force: true }).catch(() => {});
   // When nothing is left to download, the whole job goes shortly after.
-  if (job.finishedAt && !job.tracks.some((t) => t.file)) {
-    setTimeout(() => jobs.has(job.id) && removeJob(job), 12_000).unref();
-  }
+  if (job.finishedAt && !job.tracks.some((t) => t.file)) leaveSoon(job);
+}
+
+/**
+ * Remove a fully downloaded job after a short pause. While the visitor is
+ * listening to one of its previews it stays (until the usual expiry at most).
+ */
+function leaveSoon(job) {
+  setTimeout(() => {
+    if (!jobs.has(job.id) || job.tracks.some((t) => t.file)) return;
+    if (Date.now() - (job.playedAt || 0) < 45_000) return leaveSoon(job);
+    removeJob(job);
+  }, 12_000).unref();
 }
 
 // ------------------------------------------------------------ public view
@@ -161,7 +179,12 @@ export function publicJob(job) {
       error: t.error,
       ready: !!t.file,
       size: t.size || 0,
-      cover: !!t.coverFile,
+      cover: t.coverFile ? t.coverFile.slice(0, 8) : null, // changes when the artwork does, so the page reloads it
+      preview: !!t.previewFile,
+      lrc: !!t.lrcFile,
+      gain: t.gain ?? null,
+      editable: !!(t.file && t.fmt),
+      site: t.site,
       source: t.source,
       match: t.match,
       meta: t.meta,

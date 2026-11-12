@@ -21,10 +21,10 @@ export class ProcError extends Error {
 /**
  * @param {string} cmd
  * @param {string[]} args
- * @param {{timeout?: number, signal?: AbortSignal, onLine?: (line: string) => void, maxOutput?: number}} [opts]
- * @returns {Promise<string>} stdout (empty when onLine is used)
+ * @param {{timeout?: number, signal?: AbortSignal, onLine?: (line: string) => void, maxOutput?: number, stderr?: boolean}} [opts]
+ * @returns {Promise<string>} stdout (empty when onLine is used); with `stderr: true`, the last 4000 characters of stderr instead
  */
-export function run(cmd, args, { timeout = 60_000, signal, onLine, maxOutput = 64 * 1024 * 1024 } = {}) {
+export function run(cmd, args, { timeout = 60_000, signal, onLine, maxOutput = 64 * 1024 * 1024, stderr = false } = {}) {
   return new Promise((resolve, reject) => {
     if (!Array.isArray(args) || args.some((a) => typeof a !== 'string' || a.includes('\0'))) {
       return reject(new ProcError('bad-args'));
@@ -57,7 +57,7 @@ export function run(cmd, args, { timeout = 60_000, signal, onLine, maxOutput = 6
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
-      else resolve(out);
+      else resolve(stderr ? err : out);
     };
 
     child.stdout.on('data', (d) => {

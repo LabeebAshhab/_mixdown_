@@ -13,6 +13,9 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self'",
   "img-src 'self' data:",
+  "media-src 'self'", // the in-page player
+  "manifest-src 'self'",
+  "worker-src 'self'", // the service worker (public/sw.js)
   "connect-src 'self'",
   "font-src 'self'",
   "base-uri 'none'",

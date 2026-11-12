@@ -220,7 +220,15 @@ export function originalFormat(srcExt) {
   if (srcExt === 'm4a' || srcExt === 'mp4') {
     return { ext: 'm4a', tags: 'ffmpeg', numbering: 'slash', cover: 'attach', args: () => ['-c:a', 'copy', '-movflags', '+faststart'] };
   }
+  if (srcExt === 'mp3') return { ext: 'mp3', tags: 'id3', cover: 'id3', args: () => ['-c:a', 'copy', '-id3v2_version', '0'] };
   return { ext: 'mka', tags: 'ffmpeg', numbering: 'slash', cover: null, args: copy };
+}
+
+/** Arguments that copy the audio of a finished file unchanged, used when its tags are rewritten. */
+export function copyArgs(ext) {
+  if (ext === 'm4a') return ['-c:a', 'copy', '-movflags', '+faststart'];
+  if (ext === 'mp3') return ['-c:a', 'copy', '-id3v2_version', '0'];
+  return ['-c:a', 'copy'];
 }
 
 /** Rough size of the finished file, used to check the storage limit before converting. */

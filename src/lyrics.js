@@ -22,16 +22,28 @@ const query = (params) =>
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
     .join('&');
 
+const TIMED_LINE = /^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/;
+
+/** The time-synced text (LRC lines), kept only when it really is timed lyrics. */
+function syncedOf(record) {
+  const lines = cleanText(record.syncedLyrics, MAX_CHARS * 2, true)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => TIMED_LINE.test(l));
+  return lines.length >= 3 ? lines.join('\n') : null;
+}
+
 function textOf(record) {
   if (!record || record.instrumental) return null;
   const plain = record.plainLyrics || String(record.syncedLyrics || '').replace(/^\[[^\]]*\]\s?/gm, '');
   const cleaned = cleanText(plain, MAX_CHARS, true);
-  return cleaned.length > 20 ? cleaned : null;
+  return cleaned.length > 20 ? { plain: cleaned, synced: syncedOf(record) } : null;
 }
 
 /**
  * @param {{title: string, artist: string, album?: string, duration?: number}} song
- * @returns {Promise<string|null>} plain lyrics, or null when none are found
+ * @returns {Promise<{plain: string, synced: string|null}|null>} the lyrics, with
+ *   their time-synced (LRC) form when the database has it; null when none are found
  */
 export async function findLyrics({ title, artist, album, duration }) {
   if (!config.lyrics || !title || !artist) return null;

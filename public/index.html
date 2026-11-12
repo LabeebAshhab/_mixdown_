@@ -4,9 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
-<meta name="description" content="Paste a YouTube link and get a properly tagged audio file with artwork and lyrics.">
+<meta name="description" content="Paste a link or type a song name and get a properly tagged audio file with album art and lyrics.">
 <title>Mixdown</title>
+
+<!-- How a shared link looks in chats and on social sites. %ORIGIN% is filled in
+     by the server from PUBLIC_URL (empty when it is not set). -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mixdown">
+<meta property="og:title" content="Mixdown: a link in, a proper music file out">
+<meta property="og:description" content="Paste a link or type a song name and get a properly tagged audio file with album art and lyrics, in FLAC, MP3, Opus and seven more formats.">
+<meta property="og:image" content="%ORIGIN%/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mixdown: paste a link, get a properly tagged music file">
+<meta name="twitter:card" content="summary_large_image">
+
+<meta name="theme-color" content="#2f3032" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4eddc" media="(prefers-color-scheme: light)">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 </head>
@@ -22,9 +39,14 @@
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></symbol>
   <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.4a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.300a4.900 4.900 0 0 0-1.300-3.400 4.600 4.600 0 0 0-.1-3.400s-1.100-.300-3.500 1.300a12 12 0 0 0-6.200 0C6.500 1.900 5.400 2.200 5.400 2.200a4.600 4.600 0 0 0-.1 3.400A4.900 4.900 0 0 0 4 9c0 4.900 3 6 5.800 6.300a3 3 0 0 0-.8 2.300V21"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.500-6.500z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.500 5.500v13M15.500 5.500v13"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l1-4.500L16.500 4a2.100 2.100 0 0 1 3 3L8 18.500zM14.500 6l3 3"/></symbol>
+  <symbol id="i-lines" viewBox="0 0 24 24"><path d="M5 7h14M5 12h10M5 17h12"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="M16 16l4.500 4.500"/></symbol>
 </svg>
 
-<div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="backdrop" aria-hidden="true"><i></i><i></i><i></i><div class="motes" id="motes"></div></div>
 
 <div class="app">
   <header class="top">
@@ -42,11 +64,11 @@
       <span class="logo-word" aria-hidden="true"><span class="mix"><b>m</b><b>i</b><b>x</b></span><span class="down"><b>d</b><b>o</b><b>w</b><b>n</b></span></span>
     </div>
     <div class="top-right">
-      <div class="meter" id="meter" title="Space your finished files are using on the server">
+      <div class="meter" id="meter" data-i18n-title="meterTitle" title="Space your finished files are using on the server">
         <span id="meter-text">0 GB of 3 GB</span>
         <span class="meter-bar"><i id="meter-fill"></i></span>
       </div>
-      <button class="icon-btn" id="theme" type="button" aria-label="Switch between light and dark theme">
+      <button class="icon-btn" id="theme" type="button" data-i18n-aria="themeAria" aria-label="Switch between light and dark theme">
         <svg class="icon sun"><use href="#i-sun"/></svg>
         <svg class="icon moon"><use href="#i-moon"/></svg>
       </button>
@@ -56,25 +78,28 @@
   <main class="stage">
     <section class="compose scroll" aria-label="Start a download">
       <h1 id="greet">Hello. What are we listening to?</h1>
-      <p class="lead">Drop in a YouTube link and I'll bring it back as a proper music file, with the right title, album art and lyrics tucked inside.</p>
+      <p class="lead" data-i18n="lead">Drop in a link or type a song's name, and I'll bring it back as a proper music file, with the right title, album art and lyrics tucked inside.</p>
 
       <form id="form" class="panel" novalidate>
         <div class="link-row">
-          <input type="url" id="url" inputmode="url" placeholder="Paste a video or playlist link" autocomplete="off" spellcheck="false" maxlength="300" required>
-          <button class="primary" id="go" type="submit"><span>Get it</span></button>
+          <input type="text" id="url" inputmode="search" enterkeyhint="go" data-i18n-placeholder="placeholder" placeholder="Paste links, or type a song name" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="8000" required>
+          <button class="primary" id="go" type="submit"><span id="go-text" data-i18n="go">Get it</span></button>
         </div>
         <div class="alert" id="alert" role="alert" hidden></div>
+        <div class="results" id="results" hidden></div>
 
-        <div class="field-label">Format</div>
+        <div class="field-label" data-i18n="formatLabel">Format</div>
         <div class="formats" id="formats" role="radiogroup" aria-label="Output format"></div>
         <p class="format-hint" id="format-hint"></p>
 
         <div class="options" id="options"></div>
 
         <div class="toggles">
-          <label class="switch"><input type="checkbox" id="opt-lyrics"><span class="track"></span><span>Add lyrics when I can find them</span></label>
-          <label class="switch"><input type="checkbox" id="opt-auto"><span class="track"></span><span>Download as soon as it's ready</span></label>
-          <label class="switch"><input type="checkbox" id="opt-album"><span class="track"></span><span>Treat a playlist as one album</span></label>
+          <label class="switch"><input type="checkbox" id="opt-lyrics"><span class="track"></span><span data-i18n="optLyrics">Add lyrics when I can find them</span></label>
+          <label class="switch sub" id="row-synced"><input type="checkbox" id="opt-synced"><span class="track"></span><span data-i18n="optSynced">Prefer time-synced lyrics (.lrc)</span></label>
+          <label class="switch"><input type="checkbox" id="opt-normalize"><span class="track"></span><span data-i18n="optNormalize">Even out the loudness</span></label>
+          <label class="switch"><input type="checkbox" id="opt-auto"><span class="track"></span><span data-i18n="optAuto">Download as soon as it's ready</span></label>
+          <label class="switch"><input type="checkbox" id="opt-album"><span class="track"></span><span data-i18n="optAlbum">Treat a playlist as one album</span></label>
         </div>
       </form>
 
@@ -83,26 +108,26 @@
 
     <section class="shelf" aria-label="Your music">
       <div class="tabs" role="tablist">
-        <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="music">Your music</button>
-        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="inspect">Inspect a file</button>
+        <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="music" data-i18n="tabMusic">Your music</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab="inspect" data-i18n="tabInspect">Inspect a file</button>
       </div>
 
       <div class="tab-panel scroll" id="panel-music" role="tabpanel">
         <div class="empty" id="empty">
           <svg class="icon big"><use href="#i-note"/></svg>
-          <p class="empty-title">It's quiet in here.</p>
-          <p>Paste a link on the left and your music will show up the moment it's ready.</p>
+          <p class="empty-title" data-i18n="emptyTitle">It's quiet in here.</p>
+          <p data-i18n="emptyText">Paste a link on the left and your music will show up the moment it's ready.</p>
         </div>
         <div id="jobs"></div>
       </div>
 
       <div class="tab-panel scroll" id="panel-inspect" role="tabpanel" hidden>
         <div class="panel">
-          <h2>What's inside this file?</h2>
-          <p class="muted">Drop an audio file (MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF or Matroska) and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
+          <h2 data-i18n="inspectTitle">What's inside this file?</h2>
+          <p class="muted" data-i18n="inspectText">Drop an audio file (MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF or Matroska) and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
           <div class="drop" id="drop" tabindex="0" role="button">
             <svg class="icon big"><use href="#i-up"/></svg>
-            <span>Drop a file here, or click to choose one</span>
+            <span data-i18n="dropText">Drop a file here, or click to choose one</span>
           </div>
           <input type="file" id="file" accept="audio/*,.flac,.m4a,.opus,.ogg,.wav,.aiff,.aif,.mp3,.dsf" hidden>
           <div id="inspect-out"></div>
@@ -112,10 +137,11 @@
   </main>
 
   <footer class="foot">
-    <span>Made with care by <strong id="credit-name"></strong></span>
+    <span><span data-i18n="madeBy">Made with care by</span> <strong id="credit-name"></strong></span>
     <a id="credit-github" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
     <a id="credit-website" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-globe"/></svg>Website</a>
-    <span class="foot-note">Only download what you have the right to.</span>
+    <label class="lang"><svg class="icon"><use href="#i-globe"/></svg><select id="lang" data-i18n-aria="langAria" aria-label="Language"></select></label>
+    <span class="foot-note" data-i18n="footNote">Only download what you have the right to.</span>
   </footer>
 </div>
 
@@ -123,14 +149,16 @@
 
 <div class="lock" id="lock" hidden>
   <form class="panel lock-box" id="lock-form">
-    <h2>This one's private</h2>
-    <p class="muted">Enter the password to come in.</p>
+    <h2 data-i18n="lockTitle">This one's private</h2>
+    <p class="muted" data-i18n="lockText">Enter the password to come in.</p>
     <input type="password" id="lock-pass" autocomplete="current-password" maxlength="200" required>
     <div class="alert" id="lock-alert" role="alert" hidden></div>
-    <button class="primary" type="submit"><span>Unlock</span></button>
+    <button class="primary" type="submit"><span data-i18n="unlock">Unlock</span></button>
   </form>
 </div>
 
+<script src="/lang.js" defer></script>
+<script src="/backdrop.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

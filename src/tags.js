@@ -88,12 +88,40 @@ function frame(id, body) {
 }
 const textFrame = (id, value) => frame(id, Buffer.concat([Buffer.from([1]), utf16(value)]));
 
+/** LRC text ("[01:02.30]line") as [milliseconds, line] pairs, in order. */
+export function parseLrc(text) {
+  const out = [];
+  for (const raw of String(text || '').split('\n')) {
+    const stamps = [];
+    let rest = raw.trim();
+    for (let m; (m = /^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/.exec(rest)); rest = rest.slice(m[0].length)) {
+      const fraction = m[3] ? Number(m[3].padEnd(3, '0')) : 0;
+      stamps.push(Number(m[1]) * 60_000 + Number(m[2]) * 1000 + fraction);
+    }
+    for (const ms of stamps) out.push([ms, rest.trim()]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+/** ID3 SYLT frame: lyrics with a time for every line, for players that scroll them. */
+function syncedFrame(lrc) {
+  const lines = parseLrc(lrc);
+  if (lines.length < 3) return null;
+  const parts = [Buffer.from([1]), Buffer.from('eng', 'latin1'), Buffer.from([2, 1]), utf16(''), NUL16]; // times in ms, content = lyrics
+  for (const [ms, line] of lines) {
+    const at = Buffer.alloc(4);
+    at.writeUInt32BE(Math.min(ms, 0xffffffff));
+    parts.push(utf16(line), NUL16, at);
+  }
+  return frame('SYLT', Buffer.concat(parts));
+}
+
 /**
  * @param {object} t neutral tags
- * @param {{lyrics?: string, cover?: Buffer}} [extra]
+ * @param {{lyrics?: string, synced?: string, cover?: Buffer}} [extra] `synced` is LRC text
  * @returns {Buffer} a complete ID3v2.3 tag
  */
-export function buildId3(t, { lyrics, cover } = {}) {
+export function buildId3(t, { lyrics, synced, cover } = {}) {
   const frames = [];
   const add = (id, v) => {
     if (v !== null && v !== undefined && v !== '') frames.push(textFrame(id, v));
@@ -109,6 +137,8 @@ export function buildId3(t, { lyrics, cover } = {}) {
   if (lyrics) {
     frames.push(frame('USLT', Buffer.concat([Buffer.from([1]), Buffer.from('eng', 'latin1'), utf16(''), NUL16, utf16(lyrics)])));
   }
+  const timed = synced ? syncedFrame(synced) : null;
+  if (timed) frames.push(timed);
   if (cover) {
     frames.push(frame('APIC', Buffer.concat([Buffer.from([0]), Buffer.from('image/jpeg\0', 'latin1'), Buffer.from([3, 0]), cover])));
   }
@@ -128,8 +158,24 @@ export function buildId3(t, { lyrics, cover } = {}) {
 export async function writeMp3WithId3(src, dest, tag) {
   const out = createWriteStream(dest);
   out.write(tag);
-  await pipeline(createReadStream(src), out);
+  // When `src` already starts with a tag (a file being re-tagged), skip it.
+  await pipeline(createReadStream(src, { start: await id3Length(src) }), out);
   await fs.rm(src, { force: true });
+}
+
+/** Length in bytes of the ID3v2 tag at the start of a file, or 0 when there is none. */
+async function id3Length(file) {
+  const fh = await fs.open(file, 'r');
+  try {
+    const head = Buffer.alloc(10);
+    const { bytesRead } = await fh.read(head, 0, 10, 0);
+    if (bytesRead < 10 || head.toString('latin1', 0, 3) !== 'ID3' || head[6] > 127 || head[7] > 127 || head[8] > 127 || head[9] > 127) return 0;
+    const size = (head[6] << 21) | (head[7] << 14) | (head[8] << 7) | head[9];
+    const total = 10 + size + (head[5] & 0x10 ? 10 : 0);
+    return total < (await fh.stat()).size ? total : 0;
+  } finally {
+    await fh.close();
+  }
 }
 
 async function appendChunk(file, magic, chunkId, sizeIsBigEndian, tag) {
@@ -169,6 +215,9 @@ export async function appendDsfId3(file, tag) {
     const head = Buffer.alloc(28);
     await fh.read(head, 0, 28, 0);
     if (head.toString('latin1', 0, 4) !== 'DSD ') return false;
+    // A file being re-tagged already has a tag at the end: cut it off first.
+    const old = head.readBigUInt64LE(20);
+    if (old >= 28n && old < BigInt((await fh.stat()).size)) await fh.truncate(Number(old));
     const { size } = await fh.stat();
     await fh.write(tag, 0, tag.length, size);
     const fields = Buffer.alloc(16);
