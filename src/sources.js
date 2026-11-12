@@ -84,8 +84,9 @@ export function parseEntry(site, entry) {
   }
   const url = String(entry.url || entry.webpage_url || '');
   if (site === 'soundcloud') {
-    // Songs deep in a long set are listed by number rather than by address.
-    const m = /^https:\/\/api(?:-v2)?\.soundcloud\.com\/tracks\/(\d+)(?:[/?#].*)?$/.exec(url);
+    // Songs deep in a long set are listed by number rather than by address,
+    // either bare (tracks/123) or as a URN (tracks/soundcloud:tracks:123).
+    const m = /^https:\/\/api(?:-v2)?\.soundcloud\.com\/tracks\/(?:soundcloud(?::|%3A)tracks(?::|%3A))?(\d+)(?:[/?#].*)?$/i.exec(url);
     if (m && SOUNDCLOUD_TRACK_ID.test(m[1])) return one('soundcloud', 'video', m[1], `https://api.soundcloud.com/tracks/${m[1]}`);
   }
   const parsed = parseSource(url);

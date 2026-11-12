@@ -230,6 +230,60 @@ function paintSeek() {
   if (time) time.textContent = (fmtTime(player.currentTime) || '0:00') + (total && isFinite(total) ? ' / ' + fmtTime(total) : '');
 }
 
+// Volume: one setting for the whole page, remembered between visits. On
+// phones where only the hardware buttons may change it (iOS), the control is
+// left out.
+const canSetVolume = (() => {
+  const probe = new Audio();
+  probe.volume = 0.5;
+  return probe.volume === 0.5;
+})();
+let volume = parseFloat(store.get('volume', '1'));
+if (!(volume >= 0 && volume <= 1)) volume = 1;
+let muted = store.get('muted', '0') === '1';
+
+function paintVolume() {
+  player.volume = volume;
+  player.muted = muted;
+  const heard = muted ? 0 : volume;
+  document.querySelectorAll('.volume').forEach((box) => {
+    const range = box.querySelector('input');
+    range.value = Math.round(heard * 100);
+    range.style.setProperty('--fill', heard * 100 + '%');
+    box.classList.toggle('silent', heard === 0);
+    const label = t(heard === 0 ? 'unmute' : 'mute');
+    const button = box.querySelector('button');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  });
+}
+
+function setVolume(level, mute) {
+  volume = Math.max(0, Math.min(1, level));
+  muted = mute;
+  store.set('volume', String(volume));
+  store.set('muted', muted ? '1' : '0');
+  paintVolume();
+}
+
+function volumeNode() {
+  const box = el('div', 'volume');
+  const button = el('button', 'ghost');
+  button.type = 'button';
+  button.append(icon('volume', 'when-loud'), icon('mute', 'when-silent'));
+  // Silent (muted, or turned all the way down) -> heard again; otherwise mute.
+  button.addEventListener('click', () => (muted || volume === 0 ? setVolume(volume || 0.5, false) : setVolume(volume, true)));
+  const range = el('input');
+  range.type = 'range';
+  range.min = '0';
+  range.max = '100';
+  range.step = '1';
+  range.setAttribute('aria-label', t('volume'));
+  range.addEventListener('input', () => setVolume(range.value / 100, false));
+  box.append(button, range);
+  return box;
+}
+
 function paintPlayer() {
   document.querySelectorAll('.track[data-key]').forEach((row) => {
     const on = row.dataset.key === nowKey;
@@ -240,6 +294,7 @@ function paintPlayer() {
     if (button) button.setAttribute('aria-label', t(live ? 'pause' : 'play'));
   });
   paintSeek();
+  paintVolume();
 }
 
 for (const name of ['play', 'pause', 'ended', 'emptied']) player.addEventListener(name, paintPlayer);
@@ -444,6 +499,7 @@ function trackNode(job, tr, i) {
     add(fmtSize(tr.size));
     if (match.edited) add(t('edited'), 'ok');
     else add(match.matched ? t('matchedOn', { source: match.source }) : match.lookupFailed ? t('lookupFailed') : t('noMatch'), match.matched ? 'ok' : 'warn');
+    add(match.fullFrom ? t('fullFrom', { source: match.fullFrom }) : null);
     add(m.cover ? t('artwork') : null, 'ok');
     add(m.lyrics ? t(tr.lrc ? 'syncedLyrics' : 'lyrics') : null, 'ok');
     add(tr.gain ? t('levelled', { db: (tr.gain > 0 ? '+' : '−') + Math.abs(tr.gain).toFixed(1) }) : null);
@@ -466,6 +522,7 @@ function trackNode(job, tr, i) {
       if (nowKey === key && player.duration) player.currentTime = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width)) * player.duration;
     });
     seekRow.append(seek, el('span', 'seek-time'));
+    if (canSetVolume) seekRow.append(volumeNode());
     body.append(seekRow);
   }
   row.append(body);

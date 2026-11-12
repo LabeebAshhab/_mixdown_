@@ -90,6 +90,8 @@ export const config = {
   search: (process.env.SEARCH || 'on').toLowerCase() !== 'off', // search by song name
   preview: (process.env.PREVIEW || 'on').toLowerCase() !== 'off', // in-page player
   previewSeconds: num('PREVIEW_MINUTES', 10, 1, 60) * 60, // longest preview kept per track
+  // SoundCloud only gives a 30-second clip of some songs; fetch the full song from YouTube instead
+  soundcloudFallback: (process.env.SOUNDCLOUD_FALLBACK || 'on').toLowerCase() !== 'off',
   loudnessTarget: num('LOUDNESS_LUFS', -14, -30, -8), // level aimed for when "even out the loudness" is on
 
   // Metadata

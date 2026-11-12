@@ -290,6 +290,18 @@ h2 { font-size: 17px; font-weight: 640; letter-spacing: -.01em; margin-bottom: 4
 .seek::before { content: ""; position: absolute; left: 0; right: 0; height: 4px; border-radius: 4px; background: var(--line-strong); }
 .seek i { position: relative; display: block; width: 100%; height: 4px; border-radius: 4px; background: var(--accent); transform-origin: left; transform: scaleX(0); }
 .seek-time { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.volume { flex: none; display: flex; align-items: center; gap: 2px; }
+.volume .ghost { width: 26px; height: 26px; }
+.volume .ghost:hover { color: var(--text); background: var(--soft); }
+.volume .when-silent, .volume.silent .when-loud { display: none; }
+.volume.silent .when-silent { display: block; }
+.volume input { -webkit-appearance: none; appearance: none; --fill: 100%; width: 64px; height: 16px; margin: 0; background: transparent; cursor: pointer; }
+.volume input::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(to right, var(--accent) var(--fill), var(--line-strong) var(--fill)); }
+.volume input::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4px; border-radius: 50%; background: var(--accent); }
+.volume input::-moz-range-track { height: 4px; border-radius: 4px; background: var(--line-strong); }
+.volume input::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--accent); }
+.volume input::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--accent); }
+@media (max-width: 600px) { .volume input { width: 52px; } }
 
 .track-actions { flex: none; display: flex; align-items: center; gap: 4px; }
 .track-actions .ghost { text-decoration: none; }

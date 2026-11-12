@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { copyArgs, estimateBytes, FORMATS, originalFormat } from './formats.js';
 import { findLyrics } from './lyrics.js';
-import { resolveMetadata } from './metadata.js';
+import { cleanTitle, norm, resolveMetadata, searchNorm, versions } from './metadata.js';
 import { safeFetch } from './net.js';
 import { run } from './proc.js';
 import { readAudio } from './reader/index.js';
@@ -64,6 +64,19 @@ export async function resolveSource(job) {
 const searchCache = new Map(); // query -> { at, results }
 let searching = 0;
 
+/** The first few YouTube videos for some words, as yt-dlp lists them: no live streams, nothing too long. */
+async function youtubeSearch(query, signal) {
+  const out = await run(config.ytdlp, ytdlp('-J', '--flat-playlist', '--playlist-end', '8', '--', `ytsearch8:${query}`), {
+    timeout: 30_000,
+    maxOutput: 4 * 1024 * 1024,
+    signal,
+  });
+  const info = JSON.parse(out);
+  return (Array.isArray(info.entries) ? info.entries : []).filter(
+    (e) => e && VIDEO_ID.test(e.id || '') && e.live_status !== 'is_live' && !(e.duration > config.maxTrackSeconds),
+  );
+}
+
 /**
  * Songs on YouTube matching a few words. The words only ever travel as the
  * text of a search (after "ytsearch8:"), never as an address or an option.
@@ -76,13 +89,7 @@ export async function searchSongs(query) {
   if (searching >= 3) throw new PublicError('Search is busy right now. Try again in a moment.', 503);
   searching++;
   try {
-    const out = await run(config.ytdlp, ytdlp('-J', '--flat-playlist', '--playlist-end', '8', '--', `ytsearch8:${query}`), {
-      timeout: 30_000,
-      maxOutput: 4 * 1024 * 1024,
-    });
-    const info = JSON.parse(out);
-    const results = (Array.isArray(info.entries) ? info.entries : [])
-      .filter((e) => e && VIDEO_ID.test(e.id || '') && e.live_status !== 'is_live' && !(e.duration > config.maxTrackSeconds))
+    const results = (await youtubeSearch(query))
       .slice(0, 6)
       .map((e) => ({
         url: `https://www.youtube.com/watch?v=${e.id}`,
@@ -349,7 +356,142 @@ async function readMeta(file) {
   };
 }
 
+// ------------------------------------------------------------ SoundCloud previews
+
+// Without a Go+ subscription SoundCloud plays only a 30-second clip of some
+// songs (mostly label releases); yt-dlp names those streams "preview". A clip
+// is never handed over as if it were the song: the full song is looked for on
+// YouTube instead, and when it cannot be found the track fails with a reason.
+// A song shorter than the clip is already whole.
+const isPreview = (info) => /preview/i.test(String(info.format_id || '')) && !(info.duration < 29);
+
+const OTHER_KIND = /\b(cover|karaoke|tribute|reaction|tutorial|lesson|mashup|parody|bass boosted|reverb|full album|compilation)\b/i;
+const squash = (s) => norm(s).replace(/ /g, '');
+
+/** Share of the words of `want` found in `text`, 0..1. */
+function covered(want, text) {
+  const words = norm(want).split(' ').filter(Boolean);
+  if (!words.length) return 0;
+  const have = new Set(searchNorm(text).split(' '));
+  return words.filter((w) => have.has(w)).length / words.length;
+}
+
+/**
+ * How well a YouTube search result fits a song, 0 when it is not that song.
+ * The title and artist have to be there and the kind of recording (live,
+ * remix, ...) has to agree; the artist's own channel, an audio-only upload and
+ * the right length then decide between the ones left.
+ */
+function scoreVideo(e, want, rank) {
+  const length = Number(e.duration);
+  if (!(length >= 40)) return 0;
+  const title = String(e.title || '');
+  const channel = String(e.channel || e.uploader || '');
+  if (covered(want.core, title) < 0.8) return 0;
+  if (want.artist && covered(want.artist, `${channel} ${title}`) < 0.8) return 0;
+  const kinds = versions(title);
+  if (kinds.size !== want.kinds.size || [...kinds].some((k) => !want.kinds.has(k))) return 0;
+  if (OTHER_KIND.test(title) && !OTHER_KIND.test(want.text)) return 0;
+
+  let s = 0.5 - rank * 0.02;
+  const name = channel.replace(/ - Topic$/, '').replace(/\s*VEVO$/i, '');
+  if (want.artist && squash(name) === squash(want.artist)) s += 0.2;
+  if (/ - Topic$/.test(channel) || /\baudio\b/i.test(title)) s += 0.1;
+  if (e.channel_is_verified) s += 0.05;
+  if (want.duration) {
+    const diff = Math.abs(length - want.duration);
+    s += diff <= 3 ? 0.3 : diff <= 8 ? 0.15 : diff <= 20 ? 0 : -0.3;
+  }
+  return s;
+}
+
+/**
+ * The same song on YouTube, or null. The words only ever travel as the text
+ * of a search, and the address is rebuilt from the checked video id.
+ * @param {{title: string, artist: string, duration: number|null}} song
+ * @param {string} listed the title as the other site shows it
+ */
+async function findOnYouTube(song, listed, signal) {
+  const text = `${listed} ${song.title}`;
+  const want = {
+    artist: song.artist,
+    core: norm(cleanTitle(song.title).replace(/[([][^)\]]*[)\]]/g, ' ')) || norm(song.title),
+    kinds: versions(text),
+    text,
+    duration: song.duration,
+  };
+  const query = cleanText(`${song.artist} ${song.title}`, 150);
+  if (!want.core || query.length < 2) return null;
+  let best = null;
+  (await youtubeSearch(query, signal)).forEach((e, rank) => {
+    const s = scoreVideo(e, want, rank);
+    if (s > 0.25 && (!best || s > best.s)) best = { s, id: e.id };
+  });
+  return best && { site: 'youtube', url: `https://www.youtube.com/watch?v=${best.id}` };
+}
+
+/**
+ * Called when SoundCloud gave only its clip: identify the song from what
+ * SoundCloud says about it, then download the whole of it from YouTube.
+ * @returns {Promise<{got: object, match: object}>} the new download and the catalogue match
+ */
+async function fullSong(job, track, work, clip) {
+  const only = 'SoundCloud only gives a 30-second preview of this song';
+  if (!config.soundcloudFallback) throw new PublicError(`${only}. The whole song needs a SoundCloud Go+ subscription.`);
+  // The clip's length says nothing about the song's, so it is left out of the lookup.
+  const match = await resolveMetadata({ ...clip, duration: undefined });
+  const video = await findOnYouTube({ ...match.tags, duration: match.duration }, String(clip.title || ''), job.abort.signal).catch((e) => {
+    if (e?.kind === 'aborted') throw e;
+    console.warn(`[job ${job.id}] YouTube search for the full song failed: ${e?.kind || e?.message}`);
+    return null;
+  });
+  if (!video) throw new PublicError(`${only}, and I could not find the whole song on YouTube.`);
+  const dir = path.join(work, 'full');
+  await fs.mkdir(dir);
+  track.progress = 0;
+  return { got: await download(job, track, dir, video.url), match };
+}
+
 // ------------------------------------------------------------ one track
+
+/** Download the best audio stream of one checked address into `dir`, with its info and thumbnail. */
+async function download(job, track, dir, url) {
+  await run(
+    config.ytdlp,
+    ytdlp(
+      '-f', 'bestaudio/best',
+      '--no-playlist',
+      '--max-filesize', `${Math.floor(config.maxSourceBytes / 1048576)}M`,
+      '--match-filter', `duration <=? ${config.maxTrackSeconds} & !is_live`,
+      '--newline',
+      '--write-info-json',
+      '--write-thumbnail',
+      '--convert-thumbnails', 'jpg',
+      '--progress-template', 'download:PROGRESS %(progress._percent_str)s',
+      '-o', path.join(dir, 'src.%(ext)s'),
+      '--', url,
+    ),
+    {
+      timeout: config.timeouts.download,
+      signal: job.abort.signal,
+      onLine: (line) => {
+        const m = /PROGRESS\s+([\d.]+)%/.exec(line);
+        if (m) track.progress = Math.min(80, Math.round(parseFloat(m[1]) * 0.8));
+      },
+    },
+  );
+  const files = await fs.readdir(dir);
+  const srcName = files.find((f) => /^src\.[a-z0-9]{1,5}$/i.test(f) && !/\.(json|jpg|jpeg|png|webp|part|ytdl)$/i.test(f));
+  if (!srcName || !files.includes('src.info.json')) {
+    throw new PublicError(`This one is a live stream, longer than ${Math.round(config.maxTrackSeconds / 60)} minutes, or too large.`);
+  }
+  return {
+    source: path.join(dir, srcName),
+    ext: path.extname(srcName).slice(1).toLowerCase(),
+    info: JSON.parse(await fs.readFile(path.join(dir, 'src.info.json'), 'utf8')),
+    thumbnail: files.includes('src.jpg') ? path.join(dir, 'src.jpg') : null,
+  };
+}
 
 export async function processTrack(job, track, index) {
   const signal = job.abort.signal;
@@ -361,40 +503,18 @@ export async function processTrack(job, track, index) {
     // 1. Download the best audio stream, its info and thumbnail. The address
     //    was rebuilt from checked parts (src/sources.js).
     track.status = 'downloading';
-    await run(
-      config.ytdlp,
-      ytdlp(
-        '-f', 'bestaudio/best',
-        '--no-playlist',
-        '--max-filesize', `${Math.floor(config.maxSourceBytes / 1048576)}M`,
-        '--match-filter', `duration <=? ${config.maxTrackSeconds} & !is_live`,
-        '--newline',
-        '--write-info-json',
-        '--write-thumbnail',
-        '--convert-thumbnails', 'jpg',
-        '--progress-template', 'download:PROGRESS %(progress._percent_str)s',
-        '-o', path.join(work, 'src.%(ext)s'),
-        '--', track.url,
-      ),
-      {
-        timeout: config.timeouts.download,
-        signal,
-        onLine: (line) => {
-          const m = /PROGRESS\s+([\d.]+)%/.exec(line);
-          if (m) track.progress = Math.min(80, Math.round(parseFloat(m[1]) * 0.8));
-        },
-      },
-    );
-
-    const files = await fs.readdir(work);
-    const srcName = files.find((f) => /^src\.[a-z0-9]{1,5}$/i.test(f) && !/\.(json|jpg|jpeg|png|webp|part|ytdl)$/i.test(f));
-    if (!srcName || !files.includes('src.info.json')) {
-      throw new PublicError(`This one is a live stream, longer than ${Math.round(config.maxTrackSeconds / 60)} minutes, or too large.`);
-    }
-    const source = path.join(work, srcName);
-    const info = JSON.parse(await fs.readFile(path.join(work, 'src.info.json'), 'utf8'));
-    track.title = cleanText(info.title, 200) || track.title;
+    let got = await download(job, track, work, track.url);
+    const listed = got.info; // what the pasted site says about the song
+    const thumbnail = got.thumbnail;
+    track.title = cleanText(listed.title, 200) || track.title;
     if (job.tracks.length === 1) job.title = track.title;
+
+    // SoundCloud's 30-second clip is swapped for the whole song from YouTube.
+    let found = null;
+    if (track.site === 'soundcloud' && isPreview(listed)) {
+      ({ got, match: found } = await fullSong(job, track, work, listed));
+    }
+    const { source, info } = got; // `info` describes the audio that will be converted
     track.source = { codec: cleanText(info.acodec, 20), bitrate: Number.isFinite(info.abr) ? Math.round(info.abr) : null };
 
     // Refuse before converting if the result would not fit in the visitor's space.
@@ -410,7 +530,7 @@ export async function processTrack(job, track, index) {
     // 2. Identify the song: catalogue tags, album artwork, lyrics.
     track.status = 'tagging';
     track.progress = 82;
-    const match = await resolveMetadata(info);
+    const match = found || (await resolveMetadata(listed));
     const matched = match.confidence !== null;
     const tags = match.tags;
     if (job.asAlbum && job.kind === 'playlist' && job.tracks.length > 1) {
@@ -423,7 +543,7 @@ export async function processTrack(job, track, index) {
     }
     const candidates = [];
     if (match.coverUrl) candidates.push({ url: match.coverUrl, label: `${match.source} album art` });
-    if (files.includes('src.jpg')) candidates.push({ file: path.join(work, 'src.jpg'), label: site.artwork });
+    if (thumbnail) candidates.push({ file: thumbnail, label: site.artwork });
     const [lyrics, cover] = await Promise.all([
       job.wantLyrics
         ? findLyrics({ title: tags.title, artist: tags.artist, album: tags.album, duration: info.duration }).catch(() => null)
@@ -438,6 +558,7 @@ export async function processTrack(job, track, index) {
       confidence: match.confidence,
       cover: cover.label,
       lookupFailed: match.lookupFailed,
+      fullFrom: found ? SITES.youtube.label : undefined, // the site had only a clip of it
     };
 
     // 3. Convert and tag.
@@ -445,7 +566,7 @@ export async function processTrack(job, track, index) {
     track.progress = 86;
     let fmt = FORMATS[job.format];
     const copied = fmt.special === 'original';
-    if (copied) fmt = originalFormat(path.extname(srcName).slice(1).toLowerCase());
+    if (copied) fmt = originalFormat(got.ext);
 
     // Loudness: measured first, then applied as one fixed gain while converting.
     // "Original" copies the stream as it is, so there is nothing to apply it to.
@@ -493,7 +614,7 @@ export async function processTrack(job, track, index) {
     track.file = diskName;
     track.progress = 100;
     track.status = 'done';
-    console.log(`[job ${job.id}] track ${index + 1}/${job.tracks.length} done (${track.match.source}, ${fmt.ext}, ${track.size} bytes)`);
+    console.log(`[job ${job.id}] track ${index + 1}/${job.tracks.length} done (${track.match.source}${found ? ', full song from YouTube' : ''}, ${fmt.ext}, ${track.size} bytes)`);
   } catch (e) {
     track.status = 'error';
     track.error = publicMessage(e);

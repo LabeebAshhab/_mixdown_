@@ -127,6 +127,7 @@ All settings are environment variables; `.env.example` lists every one with its 
 | `RATE_EDIT_PER_MIN` | `20` | Tag edits, lookups and cover uploads per minute, per visitor |
 | `LYRICS` / `METADATA_LOOKUP` | `on` | Turn the lookups off |
 | `SEARCH` | `on` | Search by song name |
+| `SOUNDCLOUD_FALLBACK` | `on` | When SoundCloud gives only its 30-second preview of a song (those need Go+), fetch the whole song from YouTube instead; `off` makes that track fail with a message |
 | `PREVIEW` / `PREVIEW_MINUTES` | `on` / `10` | The in-page player, and the longest preview kept per track |
 | `LOUDNESS_LUFS` | `-14` | Level aimed for by "Even out the loudness" |
 | `MAX_COVER_MB` | `10` | Largest image accepted as a new cover |

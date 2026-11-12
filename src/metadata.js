@@ -29,7 +29,7 @@ export function cleanTitle(title) {
     .trim();
 }
 
-function norm(s) {
+export function norm(s) {
   return String(s || '')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
@@ -42,7 +42,7 @@ function norm(s) {
 }
 
 /** Like norm() but keeps featured artist names, which are strong search terms. */
-function searchNorm(s) {
+export function searchNorm(s) {
   return String(s || '')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
@@ -65,7 +65,7 @@ function sim(a, b) {
   return (2 * common) / (A.size + B.size);
 }
 
-function versions(s) {
+export function versions(s) {
   return new Set((String(s || '').match(VERSION) || []).map((v) => v.toLowerCase()));
 }
 
@@ -333,7 +333,8 @@ const int = (v) => (Number.isInteger(v) && v > 0 && v < 1000 ? v : null);
 
 /**
  * @param {object} info yt-dlp info json for one video
- * @returns {Promise<{source: string, confidence: number|null, tags: object, coverUrl: string|null, lookupFailed: boolean}>}
+ * @returns {Promise<{source: string, confidence: number|null, tags: object, coverUrl: string|null, duration: number|null, lookupFailed: boolean}>}
+ *   `duration` is the catalogue's length of the song in seconds, when it has one
  */
 export async function resolveMetadata(info) {
   const hyps = hypotheses(info);
@@ -342,6 +343,7 @@ export async function resolveMetadata(info) {
     source: 'YouTube',
     confidence: null,
     coverUrl: null,
+    duration: null,
     lookupFailed: false,
     tags: {
       title: cleanText(fb.title) || 'Unknown',
@@ -381,6 +383,7 @@ export async function resolveMetadata(info) {
       source: c.source,
       confidence: Math.min(1, Math.round(best.s * 100) / 100),
       coverUrl: typeof c.cover === 'string' ? c.cover : null,
+      duration: Number(c.duration) > 0 ? Number(c.duration) : null,
       lookupFailed: false,
       tags: {
         title: cleanText(c.title) || fallback.tags.title,
