@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="What Mixdown handles when you use it, where it goes and when it is deleted.">
+<title>Privacy · Mixdown</title>
+
+<!-- The words between percent signs are filled in by the server at start
+     (server.js) from its settings, so the page states this server's real
+     numbers. The page loads no script except the one that applies the saved
+     theme, calls no API and sets no cookie. -->
+<meta name="theme-color" content="#2f3032" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4eddc" media="(prefers-color-scheme: light)">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
+</head>
+<body class="doc-page">
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4 1.3-4-2-6-2.5M15 21v-3.4a3 3 0 0 0-.8-2.3c2.8-.3 5.8-1.4 5.8-6.300a4.900 4.900 0 0 0-1.300-3.400 4.600 4.600 0 0 0-.1-3.400s-1.100-.300-3.500 1.300a12 12 0 0 0-6.200 0C6.500 1.900 5.400 2.200 5.400 2.200a4.600 4.600 0 0 0-.1 3.400A4.900 4.900 0 0 0 4 9c0 4.900 3 6 5.800 6.300a3 3 0 0 0-.8 2.300V21"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+</svg>
+
+<div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<div class="doc">
+  <header class="top">
+    <a class="brand doc-home" href="/" aria-label="Mixdown, back to the app">
+      <span class="logo-mark" aria-hidden="true">
+        <span class="logo-tile"></span>
+        <svg class="logo-note" viewBox="0 0 24 24">
+          <path d="M9.2 6.5 19 4.3v3L9.2 9.5z"/>
+          <path d="M9.2 17.4V6.5M19 15.2V4.3" fill="none" stroke-width="1.7" stroke-linecap="round"/>
+          <ellipse cx="6.9" cy="17.6" rx="2.9" ry="2.25" transform="rotate(-20 6.9 17.6)" stroke="none"/>
+          <ellipse cx="16.7" cy="15.4" rx="2.9" ry="2.25" transform="rotate(-20 16.7 15.4)" stroke="none"/>
+        </svg>
+      </span>
+      <span class="logo-word" aria-hidden="true"><span class="mix"><b>m</b><b>i</b><b>x</b></span><span class="down"><b>d</b><b>o</b><b>w</b><b>n</b></span></span>
+    </a>
+    <a class="doc-back" href="/"><svg class="icon"><use href="#i-back"/></svg>Back to the app</a>
+  </header>
+
+  <main class="panel doc-body">
+    <h1>Privacy</h1>
+    <p class="doc-date">Last updated 13 November 2026</p>
+    <p class="doc-lead">Mixdown is built to know as little about you as it can. This page says what it handles when you use it, where that goes, and when it is deleted.</p>
+
+    <div class="doc-summary">
+      <h2>The short version</h2>
+      <ul>
+        <li>No account, no name, no email address. There is nothing to sign up for.</li>
+        <li>No ads, no analytics, no trackers, and nothing loaded from other sites. Your browser talks only to this server.</li>
+        <li>One cookie: a random number that keeps your files yours. It is not used to follow you anywhere.</li>
+        <li>Your files are deleted from the server the moment you download them, or after %TTL_MINUTES% minutes if you don't.</li>
+        <li>There is no database. Nothing about you is sold, shared or kept.</li>
+      </ul>
+    </div>
+
+    <h2>What the server handles</h2>
+
+    <h3>Your IP address</h3>
+    <p>Like every website, the server sees the address your requests come from. Mixdown uses it for two things: to limit how many requests one visitor can make, and to add up how much space your waiting files take (up to %QUOTA_GB% GB). It is held in memory only. It is never written to disk or to Mixdown's log. The request counters are dropped after ten minutes without a request, and the copy attached to a download goes when that download is removed.</p>
+
+    <h3>One cookie</h3>
+    <p>The first time the app talks to the server it receives a cookie named <code>sid</code>, holding a random 64-character id. It lasts 30 days, cannot be read by scripts, and is never sent along with requests coming from other sites. Its only job is to decide which downloads your browser may see and fetch. If this server is protected by a password, the server also remembers, in memory and until it restarts, that your id entered it correctly. There are no other cookies.</p>
+
+    <h3>Links and search words</h3>
+    <p>A link you paste is checked, reduced to the part that identifies the song or playlist, and handed to the download tool on the server; anything that is not a YouTube or SoundCloud link is refused. Words you type instead of a link are used as a search on YouTube, and only ever as search words. A link is held in memory as part of your download and disappears with it. Search words and their results are kept in memory, with nothing about who searched, so that a repeated search is quick; they are reused for ten minutes and dropped as newer searches come in or when the server restarts.</p>
+
+    <h3>The music</h3>
+    <p>The audio is downloaded to the server, converted and tagged. What is kept sits in a folder with a random name: the finished file, a small MP3 for the in-page player (at most %PREVIEW_MINUTES% minutes long), the artwork, and a lyrics file if you asked for one.</p>
+    <ul>
+      <li>A finished file is deleted as soon as it has been sent to you in full.</li>
+      <li>Once everything in a download has been collected, the rest (the player's copy and the artwork) goes a few seconds later, or when you stop listening.</li>
+      <li>Anything you have not collected is deleted %TTL_MINUTES% minutes after the download finished.</li>
+      <li>Pressing the remove button on a download deletes all of it at once.</li>
+      <li>Whenever the server restarts, everything left on it is deleted.</li>
+    </ul>
+
+    <h3>Files you upload</h3>
+    <p><strong>Inspect a file.</strong> Only the kinds of audio file this server accepts are taken, and that is judged from the file's own bytes, never from its name. The file is saved under a random name and read once, for its tags and audio details, by a separate locked-down process that can open nothing else on the server. It is deleted straight away, whether or not it could be read. Its name never leaves your browser, and what comes back is shown to you as plain text.</p>
+    <p><strong>Your own cover image.</strong> The picture is checked and re-encoded, and only the re-encoded copy is kept, together with the song it belongs to, until that song is deleted.</p>
+
+    <h3>Tags you correct</h3>
+    <p>A title and artist you type in the tag editor are used to look the song up again and are written into your file. They are kept with the download and go with it.</p>
+
+    <h3>The server log</h3>
+    <p>Mixdown writes short technical lines: the random id of a download, which catalogue matched, the file type and size, and, when something fails, the error text of the tool that failed, which can name the video or track involved. It does not write IP addresses, cookies, search words or the names of uploaded files.</p>
+
+    <h2>Other services the server talks to</h2>
+    <p>To fetch a song and work out what it is, the server contacts a few other services. These requests come from the server, never from your browser, so the services see the server's address and not yours, and receive no cookie or id of yours.</p>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>Service</th><th>When</th><th>What it receives</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-label="Service">YouTube, SoundCloud</td>
+            <td data-label="When">Fetching a link, searching by song name, and finding the whole song on YouTube when SoundCloud offers only a short preview</td>
+            <td data-label="What it receives">The link, the words you searched for, or the song's title and artist</td>
+          </tr>
+          <tr>
+            <td data-label="Service">Apple iTunes Search, Deezer, MusicBrainz</td>
+            <td data-label="When">Identifying a song, and when you look one up in the tag editor</td>
+            <td data-label="What it receives">The song's title and artist, as search words</td>
+          </tr>
+          <tr>
+            <td data-label="Service">Apple, Deezer and Cover Art Archive (Internet Archive) image servers</td>
+            <td data-label="When">Fetching album artwork</td>
+            <td data-label="What it receives">A request for that album's cover image</td>
+          </tr>
+          <tr>
+            <td data-label="Service">LRCLIB</td>
+            <td data-label="When">Looking for lyrics, when you left that switched on</td>
+            <td data-label="What it receives">The song's title, artist, album and length</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Each of these services handles the server's requests under its own privacy policy. The catalogue and lyrics lookups can be switched off by whoever runs the server.</p>
+    <p>The GitHub and website links in the footer lead away from this site. They open without telling the other site which page you came from.</p>
+
+    <h2>What stays in your browser</h2>
+    <p>Your preferences are kept in your browser's own storage for this site, on your device:</p>
+    <ul>
+      <li>the theme (light or dark) and the language;</li>
+      <li>the format you last chose, its options, and the five switches under them;</li>
+      <li>the player's volume;</li>
+      <li>up to 18 small album covers of songs you fetched, used for the artwork drifting in the background.</li>
+    </ul>
+    <p>The format, its options and the choices that shape the file (lyrics, loudness, album) are sent with each download you start, because the server needs them to make your file. The rest never leaves your browser.</p>
+    <p>Your browser may also keep a copy of the app's own files (the page, its styles and scripts) so that it opens quickly and when you are offline. Songs, artwork and everything else belonging to your downloads are never stored that way.</p>
+    <p>If you install Mixdown on a phone and share a link to it from another app, the link arrives in the page's address, is placed in the link field and is then removed from the address. Nothing starts until you press the button.</p>
+
+    <h2>How long things are kept</h2>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>What</th><th>Where</th><th>Until</th></tr>
+        </thead>
+        <tbody>
+          <tr><td data-label="What">Finished files</td><td data-label="Where">Server disk</td><td data-label="Until">You download them; %TTL_MINUTES% minutes at most</td></tr>
+          <tr><td data-label="What">Player copy, artwork, lyrics file</td><td data-label="Where">Server disk</td><td data-label="Until">The download is removed; %TTL_MINUTES% minutes after it finished at most</td></tr>
+          <tr><td data-label="What">A file you inspect</td><td data-label="Where">Server disk</td><td data-label="Until">It has been read: a few seconds</td></tr>
+          <tr><td data-label="What">Links and corrected tags</td><td data-label="Where">Server memory</td><td data-label="Until">The download is removed</td></tr>
+          <tr><td data-label="What">Search words and their results</td><td data-label="Where">Server memory</td><td data-label="Until">Newer searches replace them (200 are kept at most), or the server restarts</td></tr>
+          <tr><td data-label="What">IP address</td><td data-label="Where">Server memory</td><td data-label="Until">Ten minutes after your last request, or when your downloads are removed, whichever is later</td></tr>
+          <tr><td data-label="What">The <code>sid</code> cookie</td><td data-label="Where">Your browser</td><td data-label="Until">30 days, or when you clear it</td></tr>
+          <tr><td data-label="What">Preferences and saved covers</td><td data-label="Where">Your browser</td><td data-label="Until">You clear them</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Everything the server holds in memory, and every file left on its disk, is wiped when it restarts.</p>
+
+    <h2>Your choices</h2>
+    <ul>
+      <li>Remove a download with its remove button, and its files are deleted from the server immediately.</li>
+      <li>Clear this site's data in your browser to remove the cookie, your preferences, the saved covers and the stored copy of the app.</li>
+      <li>You can block the cookie, but Mixdown cannot work without it: it is how the server knows which files are yours.</li>
+    </ul>
+
+    <h2>Who runs this</h2>
+    <p>Mixdown is free, open-source software written by <strong>%CREDIT_NAME%</strong>. Anyone can host a copy of it. Whoever runs the copy you are using is responsible for that server and for anything placed in front of it, such as a proxy or a hosting service, which may keep access logs of its own that Mixdown has no part in.</p>
+    <p>The code is public, so everything on this page can be checked against it. Questions about Mixdown or about this page are welcome through <a href="%CREDIT_GITHUB%" target="_blank" rel="noopener noreferrer">GitHub</a> or the <a href="%CREDIT_WEBSITE%" target="_blank" rel="noopener noreferrer">website</a>.</p>
+
+    <h2>Changes</h2>
+    <p>If Mixdown starts handling anything differently, this page will be updated and the date at the top will change.</p>
+  </main>
+
+  <footer class="foot">
+    <span>Made with care by <strong>%CREDIT_NAME%</strong></span>
+    <a href="%CREDIT_GITHUB%" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
+    <a href="%CREDIT_WEBSITE%" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-globe"/></svg>Website</a>
+    <span class="foot-note">Only download what you have the right to.</span>
+  </footer>
+</div>
+
+</body>
+</html>

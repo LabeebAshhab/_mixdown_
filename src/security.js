@@ -106,12 +106,16 @@ export function requireUnlocked(req, res, next) {
   res.status(401).json({ error: 'This server needs a password.', locked: true });
 }
 
-// ------------------------------------------------------------ same-origin check for writes
+// ------------------------------------------------------------ same-origin check
 
+// The API is for this site's own page. A browser says where a request comes
+// from (Sec-Fetch-Site); anything started by another site is refused, reads
+// included, so another page cannot make a visitor's browser search, list or
+// fetch here. Writes must also carry this site's own Origin when they have one.
 export function sameOrigin(req, res, next) {
-  if (req.method === 'GET' || req.method === 'HEAD') return next();
   const site = req.headers['sec-fetch-site'];
   if (site && site !== 'same-origin' && site !== 'none') return res.status(403).json({ error: 'Cross-site request refused.' });
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
   const origin = req.headers.origin;
   if (origin) {
     let host = null;
@@ -141,6 +145,26 @@ export function cleanText(value, max = 300, keepNewlines = false) {
   // eslint-disable-next-line no-control-regex
   s = keepNewlines ? s.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '') : s.replace(/[\u0000-\u001f\u007f]+/g, ' ');
   return s.trim().slice(0, max);
+}
+
+/**
+ * Words typed into the search box, made plain before they are used. Look-alike
+ * forms are folded into ordinary characters, characters that hide or reorder
+ * text are removed, and what is left must be words: something shaped like an
+ * address is refused rather than searched for. Throws a PublicError.
+ */
+export function cleanQuery(value) {
+  const q = cleanText(
+    String(value ?? '')
+      .normalize('NFKC')
+      .replace(/[\u00ad\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2069\ufeff\ufff9-\ufffb]|[\u{e0000}-\u{e007f}]/gu, ''),
+    100,
+  ).replace(/\s+/g, ' ');
+  if (q.length < 2 || !/[\p{L}\p{N}]/u.test(q)) throw new PublicError('Type a few more letters.');
+  if (q.includes('://') || /^www\./i.test(q) || /^[\w.-]+\.[a-z]{2,}\/\S+$/i.test(q)) {
+    throw new PublicError('That looks like a link from a site I cannot use. Type a song name instead.');
+  }
+  return q;
 }
 
 /**

@@ -58,9 +58,16 @@ function soundcloud(u) {
  * @returns {{site: string, kind: 'video'|'playlist', id: string, url: string} | null}
  */
 export function parseSource(input) {
+  // A real link is short and made of printable ASCII only. Spaces, control
+  // characters, backslashes and look-alike letters from other alphabets are
+  // refused here, before the address is even taken apart.
+  const text = String(input ?? '').trim();
+  if (text.length < 10 || text.length > 300 || /[^\x21-\x7e]/.test(text) || text.includes('\\')) return null;
+  // No "." or ".." steps in the path, written plainly or percent-encoded.
+  if (/\/(?:\.|%2e){1,2}(?:[/?#]|$)/i.test(text)) return null;
   let u;
   try {
-    u = new URL(String(input).trim());
+    u = new URL(text);
   } catch {
     return null;
   }

@@ -45,6 +45,7 @@
   <symbol id="i-lines" viewBox="0 0 24 24"><path d="M5 7h14M5 12h10M5 17h12"/></symbol>
   <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9.500v5h3.500l4.500 4v-13l-4.500 4zM15.500 9a4.200 4.200 0 0 1 0 6M18 6.500a7.800 7.800 0 0 1 0 11"/></symbol>
   <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.500v5h3.500l4.500 4v-13l-4.500 4zM16 9.500l5 5M21 9.500l-5 5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 2.800v5.700c0 4.300-2.900 7.600-7 9.500-4.100-1.900-7-5.200-7-9.500V5.800zM9 12l2.200 2.200L15.200 10"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="M16 16l4.500 4.500"/></symbol>
 </svg>
 
@@ -126,12 +127,12 @@
       <div class="tab-panel scroll" id="panel-inspect" role="tabpanel" hidden>
         <div class="panel">
           <h2 data-i18n="inspectTitle">What's inside this file?</h2>
-          <p class="muted" data-i18n="inspectText">Drop an audio file (MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF or Matroska) and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
+          <p class="muted" id="inspect-text">Drop an audio file and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
           <div class="drop" id="drop" tabindex="0" role="button">
             <svg class="icon big"><use href="#i-up"/></svg>
             <span data-i18n="dropText">Drop a file here, or click to choose one</span>
           </div>
-          <input type="file" id="file" accept="audio/*,.flac,.m4a,.opus,.ogg,.wav,.aiff,.aif,.mp3,.dsf" hidden>
+          <input type="file" id="file" hidden>
           <div id="inspect-out"></div>
         </div>
       </div>
@@ -142,6 +143,7 @@
     <span><span data-i18n="madeBy">Made with care by</span> <strong id="credit-name"></strong></span>
     <a id="credit-github" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
     <a id="credit-website" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-globe"/></svg>Website</a>
+    <a href="/privacy" target="_blank" rel="noopener"><svg class="icon"><use href="#i-shield"/></svg><span data-i18n="privacy">Privacy</span></a>
     <label class="lang"><svg class="icon"><use href="#i-globe"/></svg><select id="lang" data-i18n-aria="langAria" aria-label="Language"></select></label>
     <span class="foot-note" data-i18n="footNote">Only download what you have the right to.</span>
   </footer>

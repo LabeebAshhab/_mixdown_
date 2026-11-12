@@ -2,6 +2,7 @@
 // (see .env.example) and is range-checked before use.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { INSPECT_TYPES, TYPE_ALIASES } from './inspect-types.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GIB = 1024 ** 3;
@@ -39,6 +40,20 @@ function text(name, def, max = 80) {
   return v === undefined ? def : v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max);
 }
 
+/**
+ * A list of the inspector's file kinds ("mp3, flac wav"). Unknown words are
+ * dropped; a list with nothing usable in it falls back to every kind.
+ */
+function fileKinds(name) {
+  const all = Object.keys(INSPECT_TYPES);
+  const wanted = String(process.env[name] || '')
+    .toLowerCase()
+    .split(/[\s,;]+/)
+    .map((w) => TYPE_ALIASES[w.replace(/^\./, '')] || w.replace(/^\./, ''))
+    .filter((w) => all.includes(w));
+  return wanted.length ? all.filter((id) => wanted.includes(id)) : all;
+}
+
 export const config = {
   root,
   port: num('PORT', 8080, 1, 65535),
@@ -74,6 +89,7 @@ export const config = {
     lookup: 60_000,
     download: num('DOWNLOAD_TIMEOUT_SEC', 600, 10, 7200) * 1000,
     convert: num('CONVERT_TIMEOUT_SEC', 900, 10, 7200) * 1000,
+    upload: num('UPLOAD_TIMEOUT_SEC', 120, 5, 3600) * 1000, // an inspector upload has to arrive within this
   },
 
   // Requests per minute, per IP address
@@ -88,6 +104,8 @@ export const config = {
 
   // Extras
   search: (process.env.SEARCH || 'on').toLowerCase() !== 'off', // search by song name
+  inspect: (process.env.INSPECT || 'on').toLowerCase() !== 'off', // the metadata inspector (file uploads)
+  inspectTypes: fileKinds('INSPECT_TYPES'), // kinds of file it accepts, judged by their bytes
   preview: (process.env.PREVIEW || 'on').toLowerCase() !== 'off', // in-page player
   previewSeconds: num('PREVIEW_MINUTES', 10, 1, 60) * 60, // longest preview kept per track
   // SoundCloud only gives a 30-second clip of some songs; fetch the full song from YouTube instead

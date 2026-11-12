@@ -1,19 +1,14 @@
 // HTTP API. Every input is validated against a strict schema before use.
 import archiver from 'archiver';
 import express from 'express';
-import { fileTypeFromFile } from 'file-type';
-import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import fs from 'node:fs/promises';
-import { Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import { config } from './config.js';
 import { FORMAT_IDS, publicFormats, resolveOptions } from './formats.js';
+import { acceptedTypes, checkUpload, inspectUpload, tooLarge } from './inspect.js';
 import { collectTrack, createJob, jobs, publicJob, removeJob, usageFor } from './jobs.js';
 import { imageDemuxer, lookupSong, retagTrack, searchSongs, uploadCover } from './pipeline.js';
-import { readAudio } from './reader/index.js';
 import {
+  cleanQuery,
   cleanText,
   contentDisposition,
   insideDir,
@@ -92,28 +87,10 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 /** A name safe to use inside a zip. */
 const zipName = (s, fallback) => String(s).replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, ' ').replace(/\.{2,}/g, '.').trim() || fallback;
 
-// ------------------------------------------------------------ uploads (inspector, artwork)
-
-// The formats src/reader understands, as file-type names them (Matroska audio is reported as "mkv").
-const AUDIO_TYPES = new Set(['mp3', 'flac', 'wav', 'aif', 'm4a', 'mp4', 'm4b', 'ogg', 'oga', 'opus', 'dsf', 'mka', 'mkv', 'webm']);
-const UNSUPPORTED = 'That format is not supported. The inspector reads MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF and Matroska files.';
-let inspecting = 0;
-
-const tooLarge = (max) => new PublicError(`That file is larger than ${Math.round(max / 1048576)} MB.`, 413);
-
-function byteLimit(max) {
-  let seen = 0;
-  return new Transform({
-    transform(chunk, _enc, cb) {
-      seen += chunk.length;
-      cb(seen > max ? tooLarge(max) : null, chunk);
-    },
-  });
-}
+// ------------------------------------------------------------ uploads (artwork)
 
 /** A small upload held in memory, refused as soon as it passes `max` bytes. */
 async function readBody(req, max) {
-  if (Number(req.headers['content-length']) > max) throw tooLarge(max);
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -122,51 +99,6 @@ async function readBody(req, max) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
-}
-
-function describe({ format, common, native }) {
-  const short = (v) => (typeof v === 'string' && v.length > 300 ? `${v.slice(0, 300)}…` : v);
-  const pic = common.picture?.[0];
-  const tags = {};
-  for (const [k, v] of Object.entries(common)) {
-    if (k === 'picture' || v === null || v === undefined) continue;
-    if (k === 'lyrics') tags.lyrics = Array.isArray(v) && v.length ? 'embedded' : undefined;
-    else if (typeof v !== 'object') tags[k] = short(v);
-    else if (Array.isArray(v)) tags[k] = v.filter((x) => typeof x !== 'object').map(short).slice(0, 20);
-    else if (k === 'track' || k === 'disk') tags[k] = { no: v.no, of: v.of };
-  }
-  const raw = {};
-  for (const [type, list] of Object.entries(native || {})) {
-    raw[type] = list
-      .filter((t) => typeof t.value === 'string' || typeof t.value === 'number')
-      .slice(0, 80)
-      .map((t) => ({ id: String(t.id).slice(0, 60), value: short(String(t.value)) }));
-  }
-  return {
-    format: {
-      container: format.container,
-      codec: format.codec,
-      lossless: format.lossless,
-      sampleRate: format.sampleRate,
-      bitsPerSample: format.bitsPerSample,
-      numberOfChannels: format.numberOfChannels,
-      bitrate: format.bitrate,
-      duration: format.duration,
-      tagTypes: format.tagTypes,
-    },
-    tags,
-    raw,
-    picture: pic
-      ? {
-          format: /^image\/(jpeg|png|webp|gif)$/.test(pic.format) ? pic.format : 'image/jpeg',
-          bytes: pic.data.length,
-          dataUrl:
-            pic.data.length < 3_000_000 && /^image\/(jpeg|png|webp|gif)$/.test(pic.format)
-              ? `data:${pic.format};base64,${Buffer.from(pic.data).toString('base64')}`
-              : null,
-        }
-      : null,
-  };
 }
 
 // ------------------------------------------------------------ editing a finished track
@@ -213,7 +145,8 @@ export function apiRouter({ ready }) {
       credits: config.credits,
       formats: publicFormats(),
       sites: Object.values(SITES).map((s) => s.label),
-      features: { search: config.search, preview: config.preview },
+      features: { search: config.search, preview: config.preview, inspect: config.inspect },
+      inspectTypes: config.inspect ? acceptedTypes() : [],
       limits: {
         quotaBytes: config.quotaBytes,
         ttlMinutes: Math.round(config.fileTtlMs / 60_000),
@@ -282,8 +215,7 @@ export function apiRouter({ ready }) {
   // Search by song name. The words are only ever used as search text.
   r.get('/search', rateLimit(config.rate.search), wrap(async (req, res) => {
     if (!config.search) throw new PublicError('Search is switched off on this server.', 404);
-    const q = cleanText(parse(searchQuery, req.query.q), 100);
-    if (q.length < 2) throw new PublicError('Type a few more letters.');
+    const q = cleanQuery(parse(searchQuery, req.query.q));
     try {
       res.json({ results: await searchSongs(q) });
     } catch (e) {
@@ -463,6 +395,7 @@ export function apiRouter({ ready }) {
     const { track } = ownedTrack(req);
     if (!track?.file || !track.fmt) throw new PublicError('That file is gone. It may already have been downloaded.', 404);
     if (editing >= 2) throw new PublicError('The server is busy. Try again in a moment.', 503);
+    checkUpload(req, config.maxCoverBytes);
     const data = await readBody(req, config.maxCoverBytes);
     if (!imageDemuxer(data)) throw new PublicError('That does not look like a picture. Use a JPEG, PNG or WebP image.', 415);
     const job = await withTrack(req, async (j, track, index) => {
@@ -472,29 +405,10 @@ export function apiRouter({ ready }) {
     res.json(publicJob(job));
   }));
 
-  // Metadata inspector: the upload is saved under a random name, checked by
-  // its first bytes (not its name or declared type), read, and deleted.
+  // Metadata inspector. Everything that protects the server from a hostile
+  // upload is in src/inspect.js.
   r.post('/inspect', rateLimit(config.rate.inspect), wrap(async (req, res) => {
-    if (Number(req.headers['content-length']) > config.maxUploadBytes) throw tooLarge(config.maxUploadBytes);
-    if (inspecting >= 2) throw new PublicError('The inspector is busy. Try again in a moment.', 503);
-    inspecting++;
-    const tmp = insideDir(config.dataDir, `upload-${randomUUID()}`);
-    try {
-      await pipeline(req, byteLimit(config.maxUploadBytes), createWriteStream(tmp, { flags: 'wx', mode: 0o600 }));
-      const type = await fileTypeFromFile(tmp);
-      if (!type || (!type.mime.startsWith('audio/') && !AUDIO_TYPES.has(type.ext))) throw new PublicError('That does not look like an audio file.', 415);
-      if (!AUDIO_TYPES.has(type.ext)) throw new PublicError(UNSUPPORTED, 415);
-      res.json(describe(await readAudio(tmp, { timeoutMs: 30_000 })));
-    } catch (e) {
-      if (e?.public) throw e;
-      if (e?.code === 'unsupported') throw new PublicError(UNSUPPORTED, 415);
-      if (e?.code === 'limit') throw new PublicError('That file took too long to read.');
-      console.warn(`[inspect] failed: ${e?.code || e?.message}`);
-      throw new PublicError('That file could not be read.');
-    } finally {
-      inspecting--;
-      await fs.rm(tmp, { force: true }).catch(() => {});
-    }
+    res.json(await inspectUpload(req));
   }));
 
   r.use((_req, res) => res.status(404).json({ error: 'Not found.' }));

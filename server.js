@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './src/config.js';
+import { initInspector } from './src/inspect.js';
 import { initStorage, shutdown } from './src/jobs.js';
 import { run } from './src/proc.js';
 import { apiRouter } from './src/routes.js';
@@ -10,6 +11,8 @@ import { noStore, rateLimit, sameOrigin, securityHeaders, session } from './src/
 const app = express();
 app.disable('x-powered-by');
 app.set('etag', false);
+// Plain "a=b" query strings only: no nested objects built from what a visitor types in an address.
+app.set('query parser', 'simple');
 if (config.trustProxy) {
   // Behind a reverse proxy, this makes req.ip the visitor's address.
   app.set('trust proxy', /^\d+$/.test(config.trustProxy) ? Number(config.trustProxy) : config.trustProxy);
@@ -33,6 +36,24 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 // https origin checked in config.js, or nothing). No request data is involved.
 const page = (await fs.readFile(path.join(config.root, 'public', 'index.html'), 'utf8')).replaceAll('%ORIGIN%', config.publicUrl);
 app.get(['/', '/index.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(page));
+// The privacy page is static too. The words between percent signs in it are
+// replaced once, at start, with this server's own settings, so it states the
+// real numbers. Every value is escaped; no request data is involved, and the
+// page calls no API, so reading it sets no cookie.
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const facts = {
+  ORIGIN: config.publicUrl,
+  TTL_MINUTES: Math.round(config.fileTtlMs / 60_000),
+  QUOTA_GB: Math.round((config.quotaBytes / 1024 ** 3) * 10) / 10,
+  PREVIEW_MINUTES: Math.round(config.previewSeconds / 60),
+  CREDIT_NAME: config.credits.name,
+  CREDIT_GITHUB: config.credits.github,
+  CREDIT_WEBSITE: config.credits.website,
+};
+const privacy = (await fs.readFile(path.join(config.root, 'public', 'privacy.html'), 'utf8')).replace(/%([A-Z_]+)%/g, (all, key) =>
+  key in facts ? escapeHtml(facts[key]) : all,
+);
+app.get(['/privacy', '/privacy.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(privacy));
 // The service worker is checked for updates on every visit.
 app.get('/sw.js', (_req, res, next) => {
   res.set('Cache-Control', 'no-cache');
@@ -55,6 +76,7 @@ app.use((err, req, res, _next) => {
 
 await initStorage();
 await checkTools();
+console.log(`inspector: ${await initInspector()}`);
 
 const server = app.listen(config.port, () => {
   console.log(`mixdown listening on http://localhost:${config.port}`);

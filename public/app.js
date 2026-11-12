@@ -852,9 +852,21 @@ function showInspect(name, d) {
   $('#inspect-out').replaceChildren(head, table);
 }
 
+// The kinds of file this server's inspector accepts (set by its administrator).
+// Checking the name and size here only saves a pointless upload: the server
+// decides for itself, from the file's bytes.
+const inspectKinds = () => boot.inspectTypes.map((k) => k.label).join(', ');
+
 async function inspectFile(file) {
   if (!file) return;
   const out = $('#inspect-out');
+  const ending = (/\.([A-Za-z0-9]{1,5})$/.exec(file.name) || [])[1];
+  if (!ending || !boot.inspectTypes.some((k) => k.ext.includes(ending.toLowerCase()))) {
+    return out.replaceChildren(el('div', 'alert', t('inspectKind', { types: inspectKinds() })));
+  }
+  if (file.size > boot.limits.maxUploadBytes) {
+    return out.replaceChildren(el('div', 'alert', t('inspectBig', { mb: Math.round(boot.limits.maxUploadBytes / 1048576) })));
+  }
   out.replaceChildren(el('p', 'job-note', t('reading', { name: file.name })));
   try {
     showInspect(file.name, await api('/api/inspect', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }));
@@ -913,6 +925,7 @@ function paintStatic() {
   if (!boot) return;
   $('#fineprint').textContent =
     t('fineprint', { min: boot.limits.ttlMinutes, gb: fmtGb(boot.limits.quotaBytes) }) + ' ' + t('sitesNote', { sites: boot.sites.join(', ') });
+  $('#inspect-text').textContent = t('inspectText', { types: inspectKinds() });
   renderFormats();
   if (usage) syncMeter(usage);
 }
@@ -964,6 +977,10 @@ function takeSharedLink() {
   $('#credit-github').href = boot.credits.github;
   $('#credit-website').href = boot.credits.website;
   syncMeter({ used: 0, quota: boot.limits.quotaBytes });
+  // The inspector: only the file kinds this server accepts can be picked, and
+  // its tab is gone when the server has it switched off.
+  $('#file').accept = boot.inspectTypes.flatMap((k) => k.ext.map((e) => '.' + e)).join(',');
+  document.querySelector('.tab[data-tab="inspect"]').hidden = !boot.features.inspect;
   takeSharedLink();
 
   if (!boot.ready) showAlert('#alert', t('missingTools'));
