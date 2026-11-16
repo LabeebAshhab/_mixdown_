@@ -16,6 +16,7 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 
 - **Ten output formats**, each with its own options: FLAC, WAV, AIFF, ALAC, DSD, MP3, AAC, Opus, OGG Vorbis, or the original stream untouched
 - **YouTube, YouTube Music and SoundCloud** links: single songs, playlists and sets; a playlist downloads as one zip containing an album folder
+- **Playlists with dead videos still work**: private and deleted videos are left out and the job says how many were skipped; a video that fails for another reason is marked, and the rest carries on
 - **Whole songs from SoundCloud**: when SoundCloud offers only its 30-second preview of a song, the full song is fetched from YouTube instead and the track is marked "full song from YouTube"
 - **Search by song name**: type a few words instead of a link and pick from the matches
 - **Several links at once**: paste up to 25 song links together and get them back as one zip
@@ -32,7 +33,9 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 - **Album art backdrop**: the covers of your last songs drift in 3D behind the glass, blurred and very dim; they are kept in your browser only, never on the server
 - **Storage limit per visitor** (3 GB by default); files are deleted from the server the moment they are downloaded
 - **Hardened for public hosting**: see [Security](#security)
+- **People online**: a small live number in the header shows how many visitors are using the app right now; it is a count only, kept in memory, and can be switched off
 - **A privacy page** at `/privacy`, linked in the footer: what the server handles, which services it contacts and when everything is deleted, stating this server's own retention time and limits
+- **A usage policy** at `/policy`, next to it: what the app may be used for, this server's own limits, and what to expect from the files
 
 ## Formats and options
 
@@ -51,6 +54,8 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 
 A note on quality: YouTube serves lossy audio (Opus or AAC, usually 130 to 160 kbps). Converting it to a lossless or high-resolution format preserves that audio exactly but cannot add detail that was never there, and the files get much larger. "Original" keeps the stream as delivered. 32-bit FLAC is not supported by every player.
 
+FLAC files are written the way the reference encoder writes them, at every sample rate: 4096-sample blocks and a predictor order of 12 at most, which is the "subset" every FLAC decoder has to support. Left alone, ffmpeg would write 16384-sample blocks at 192 kHz, four times that size.
+
 DSD output comes from a built-in encoder (`src/dsd.js`): a fifth-order sigma-delta modulator that writes standard stereo DSF files. A DSD64 file is about 42 MB per minute.
 
 ## Quick start (Docker)
@@ -67,7 +72,7 @@ Open <http://localhost:8080>.
 - Paste several links separated by spaces or new lines to get them all in one go.
 - Press the play button on a cover to listen, and set the volume next to the seek bar; press the pencil to correct the tags.
 - Open "Inspect a file" and drop a song in to see what is inside it.
-- The footer has the language menu and the link to the privacy page.
+- The footer has the language menu and the links to the privacy page and the usage policy.
 
 To change settings, copy `.env.example` to `.env`, edit it, and run the same command again. To update yt-dlp later (needed when YouTube changes something), rebuild without the cache:
 
@@ -136,6 +141,7 @@ All settings are environment variables; `.env.example` lists every one with its 
 | `MAX_UPLOAD_MB` / `UPLOAD_TIMEOUT_SEC` | `100` / `120` | Largest file the inspector accepts, and how long an upload may take to arrive |
 | `SOUNDCLOUD_FALLBACK` | `on` | When SoundCloud gives only its 30-second preview of a song (those need Go+), fetch the whole song from YouTube instead; `off` makes that track fail with a message |
 | `PREVIEW` / `PREVIEW_MINUTES` | `on` / `10` | The in-page player, and the longest preview kept per track |
+| `ONLINE_COUNT` | `on` | The number of people online shown in the header; `off` hides it and keeps no check-ins |
 | `LOUDNESS_LUFS` | `-14` | Level aimed for by "Even out the loudness" |
 | `MAX_COVER_MB` | `10` | Largest image accepted as a new cover |
 | `PUBLIC_URL` | empty | The site's https address, for link previews |
@@ -166,7 +172,7 @@ The app is written to be exposed to untrusted visitors.
 
 **Resource limits.** Token-bucket rate limits per address (overall, new links, searches, edits, uploads, password attempts); caps on simultaneous searches and edits; a worker queue with a concurrency cap; hard timeouts that kill any subprocess; limits on source size, track length, playlist length, upload size, and per-visitor and total storage.
 
-**Isolation between visitors.** Each browser gets a random session id in an `HttpOnly`, `SameSite=Strict` cookie. Jobs can only be listed, downloaded, played, edited or removed by the session that created them. Requests started by another site are refused, reads included (`Sec-Fetch-Site`), and writes must also carry this site's own `Origin`. A link shared into the installed app, or passed in the address, is only placed in the field: nothing starts until the visitor presses the button, so a crafted link cannot start a download on someone else's behalf.
+**Isolation between visitors.** Each browser gets a random session id in an `HttpOnly`, `SameSite=Strict` cookie. Jobs can only be listed, downloaded, played, edited or removed by the session that created them. Requests started by another site are refused, reads included (`Sec-Fetch-Site`), and writes must also carry this site's own `Origin`. A link shared into the installed app, or passed in the address, is only placed in the field: nothing starts until the visitor presses the button, so a crafted link cannot start a download on someone else's behalf. The number of people online is a total and nothing more: it counts sessions whose browser sent its cookie back, at most ten per address, so a flood of requests cannot inflate it.
 
 **Headers and errors.** A strict Content-Security-Policy (no inline scripts or styles, no third-party hosts; media, manifest and service worker from the site itself only), `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and HSTS over HTTPS. Error responses are short sentences; stack traces, paths and tool output stay in the server log.
 
@@ -178,7 +184,7 @@ What this does not cover: TLS (use a reverse proxy), protection against large di
 
 ## How it works
 
-1. `yt-dlp` downloads the best audio stream, its info and thumbnail. A song name is first turned into a short list of matches to pick from.
+1. `yt-dlp` downloads the best audio stream, its info and thumbnail. A song name is first turned into a short list of matches to pick from. A playlist is listed first, without its private and deleted videos; a download the site refuses for a passing reason is tried once more.
 2. The metadata extractor (`src/metadata.js`) builds several readings of the video title, searches iTunes, Deezer and MusicBrainz, and scores candidates on title, artist and duration. Karaoke, tribute and cover versions are rejected, and the original studio album is preferred. Weak matches are refused: the file is then tagged from the YouTube data and marked "no catalogue match".
 3. Album artwork and lyrics (from LRCLIB, with their time-synced form when asked for) are fetched for the matched song.
 4. With "Even out the loudness" on, `ffmpeg` first measures the song (EBU R 128) and the difference to the target becomes one fixed gain. `ffmpeg` then converts the audio and makes the small preview for the player. Tags are written by ffmpeg where it does that well (FLAC, Ogg, MP4) and by a built-in ID3 writer elsewhere (MP3, WAV, AIFF, DSF).
@@ -198,6 +204,7 @@ src/sources.js     accepted sites and link checking
 src/formats.js     formats and options allowlist
 src/pipeline.js    search, download, identify, level, convert, tag, verify, re-tag
 src/jobs.js        queue, storage limit, cleanup
+src/presence.js    the count of people online
 src/routes.js      HTTP API and input schemas
 src/metadata.js    catalogue matching
 src/lyrics.js      lyrics lookup
@@ -208,13 +215,13 @@ src/inspect-child.js   that process: reads one upload, prints what it found
 src/inspect-types.js   the kinds of file the inspector accepts and how they are recognised
 src/dsd.js         PCM to DSD encoder
 public/            interface (app.js), translations (lang.js), backdrop (backdrop.js), privacy page (privacy.html),
-                   installable-app files (manifest.webmanifest, sw.js, icons/), link preview (og.png)
+                   usage policy (policy.html), installable-app files (manifest.webmanifest, sw.js, icons/), link preview (og.png)
 docs/              screenshots
 ```
 
 ## Responsible use
 
-Only download content you own, content under a licence that allows it (such as Creative Commons), or content you have permission to download. If you host this for other people, you are responsible for how it is used, for the terms of service of the sites it downloads from, and for the copyright law that applies to you.
+Only download content you own, content under a licence that allows it (such as Creative Commons), or content you have permission to download. If you host this for other people, you are responsible for how it is used, for the terms of service of the sites it downloads from, and for the copyright law that applies to you. The usage policy page (`public/policy.html`, served at `/policy`) tells your visitors the same, with your server's limits filled in; edit it if your rules differ.
 
 ## License
 

@@ -5,8 +5,9 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { FORMAT_IDS, publicFormats, resolveOptions } from './formats.js';
 import { acceptedTypes, checkUpload, inspectUpload, tooLarge } from './inspect.js';
-import { collectTrack, createJob, jobs, publicJob, removeJob, usageFor } from './jobs.js';
+import { collectTrack, createJob, jobs, publicJob, removeJob, usageFor, workingSessions } from './jobs.js';
 import { imageDemuxer, lookupSong, retagTrack, searchSongs, uploadCover } from './pipeline.js';
+import { checkIn, onlineCount } from './presence.js';
 import {
   cleanQuery,
   cleanText,
@@ -145,7 +146,7 @@ export function apiRouter({ ready }) {
       credits: config.credits,
       formats: publicFormats(),
       sites: Object.values(SITES).map((s) => s.label),
-      features: { search: config.search, preview: config.preview, inspect: config.inspect },
+      features: { search: config.search, preview: config.preview, inspect: config.inspect, online: config.online },
       inspectTypes: config.inspect ? acceptedTypes() : [],
       limits: {
         quotaBytes: config.quotaBytes,
@@ -173,7 +174,15 @@ export function apiRouter({ ready }) {
     const heard = playing.success ? jobs.get(playing.data) : null;
     if (heard && heard.sid === req.sid) heard.playedAt = Date.now();
     const mine = [...jobs.values()].filter((j) => j.sid === req.sid).sort((a, b) => b.createdAt - a.createdAt);
-    res.json({ jobs: mine.map(publicJob), usage: { used: usageFor(req.ip), quota: config.quotaBytes } });
+    // This same request is how the page says "still here" for the number of
+    // people online. A tab in the background says so (away=1) and is not
+    // counted, and neither is a request that came without the session cookie.
+    let online = null;
+    if (config.online) {
+      if (req.sidKnown && req.query.away !== '1') checkIn(req.sid, req.ip);
+      online = onlineCount(workingSessions());
+    }
+    res.json({ jobs: mine.map(publicJob), usage: { used: usageFor(req.ip), quota: config.quotaBytes }, online });
   });
 
   r.post('/jobs', rateLimit(config.rate.convert), json, (req, res) => {

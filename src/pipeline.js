@@ -38,23 +38,74 @@ export const newTrack = (source, title) => ({
   progress: 0,
 });
 
+// How YouTube names a playlist entry whose video is private or has been deleted.
+const GONE_TITLE = /^\[(?:private|deleted) video\]$/i;
+const isGone = (e) => GONE_TITLE.test(String(e.title || '')) || (!e.title && e.duration == null);
+
+/** What yt-dlp says a playlist holds. */
+async function listPlaylist(job) {
+  const ask = async (...extra) => {
+    const args = ytdlp('-J', '--flat-playlist', '--playlist-end', String(config.maxTracks), ...extra, '--', job.sources[0].url);
+    try {
+      return JSON.parse(await run(config.ytdlp, args, { timeout: config.timeouts.lookup, signal: job.abort.signal }));
+    } catch (e) {
+      // yt-dlp can print the whole list and still end with an error because
+      // of one entry. A list that arrived is used.
+      if (e?.kind === 'exit' && e.stdout) {
+        try {
+          const info = JSON.parse(e.stdout);
+          if (Array.isArray(info?.entries) && info.entries.length) return info;
+        } catch {
+          /* nothing usable was printed */
+        }
+      }
+      throw e;
+    }
+  };
+  try {
+    // Private and deleted videos are left out of the list. Without this
+    // option yt-dlp asks YouTube for the playlist a second time to have them
+    // listed, one more request that can fail and take the whole playlist
+    // with it.
+    return await ask('--compat-options', 'no-youtube-unavailable-videos');
+  } catch (e) {
+    // Cancelled, timed out, or a playlist that is not there: no second try.
+    if (e?.kind !== 'exit' || NO_PLAYLIST.test(e.detail || '')) throw e;
+    console.warn(`[job ${job.id}] playlist lookup failed once, trying the plain way: ${(e.detail || '').slice(0, 160)}`);
+    return ask();
+  }
+}
+const NO_PLAYLIST = /does not exist|is private|unviewable|HTTP Error 404/i;
+
 /** Work out which songs a job covers. Only playlists need a lookup. */
 export async function resolveSource(job) {
   if (job.kind !== 'playlist') {
     job.tracks = job.sources.map((s) => newTrack(s, ''));
     return;
   }
-  const out = await run(
-    config.ytdlp,
-    ytdlp('-J', '--flat-playlist', '--playlist-end', String(config.maxTracks), '--', job.sources[0].url),
-    { timeout: config.timeouts.lookup, signal: job.abort.signal },
-  );
-  const info = JSON.parse(out);
-  const entries = (Array.isArray(info.entries) ? info.entries : [])
-    .map((e) => ({ source: parseEntry(job.site, e), title: e?.title }))
+  const info = await listPlaylist(job).catch((e) => {
+    // Say what is wrong with the playlist, rather than the wording meant for a single video.
+    if (e?.kind !== 'exit') throw e;
+    console.error(`[job ${job.id}] playlist lookup failed: ${(e.detail || '').slice(0, 300)}`);
+    throw new PublicError(NO_PLAYLIST.test(e.detail || '') ? 'That playlist does not exist or is private.' : 'That playlist could not be read. Try again in a moment.');
+  });
+  const listed =(Array.isArray(info.entries) ? info.entries : []).filter(Boolean);
+  // Videos that cannot be had are skipped, and the rest of the playlist goes
+  // ahead. (SoundCloud lists songs deep in a set without a title, so only
+  // YouTube entries are judged this way.)
+  const usable = job.site === 'youtube' ? listed.filter((e) => !isGone(e)) : listed;
+  // YouTube also says how many videos the playlist has in all: the ones
+  // missing from a list that was not cut short are the ones it hid.
+  const total = Number(info.playlist_count);
+  const hidden = job.site === 'youtube' && Number.isInteger(total) && total <= config.maxTracks ? Math.max(0, total - listed.length) : 0;
+  job.skipped = hidden + (listed.length - usable.length);
+  const entries = usable
+    .map((e) => ({ source: parseEntry(job.site, e), title: e.title }))
     .filter((e) => e.source)
     .slice(0, config.maxTracks);
-  if (!entries.length) throw new PublicError('That playlist is empty or private.');
+  if (!entries.length) {
+    throw new PublicError(job.skipped ? 'Every video in that playlist is private or no longer available.' : 'That playlist is empty or private.');
+  }
   job.title = cleanText(info.title, 200) || 'Playlist';
   job.tracks = entries.map((e) => newTrack(e.source, e.title));
 }
@@ -454,32 +505,46 @@ async function fullSong(job, track, work, clip) {
 
 // ------------------------------------------------------------ one track
 
+// Failures that are usually gone a moment later: the site refusing the audio
+// data it has just offered, or the connection dropping part-way.
+const PASSING = /HTTP Error (?:403|408|5\d\d)|unable to download video data|timed out|Connection (?:reset|aborted)|Temporary failure|IncompleteRead/i;
+
 /** Download the best audio stream of one checked address into `dir`, with its info and thumbnail. */
 async function download(job, track, dir, url) {
-  await run(
-    config.ytdlp,
-    ytdlp(
-      '-f', 'bestaudio/best',
-      '--no-playlist',
-      '--max-filesize', `${Math.floor(config.maxSourceBytes / 1048576)}M`,
-      '--match-filter', `duration <=? ${config.maxTrackSeconds} & !is_live`,
-      '--newline',
-      '--write-info-json',
-      '--write-thumbnail',
-      '--convert-thumbnails', 'jpg',
-      '--progress-template', 'download:PROGRESS %(progress._percent_str)s',
-      '-o', path.join(dir, 'src.%(ext)s'),
-      '--', url,
-    ),
-    {
-      timeout: config.timeouts.download,
-      signal: job.abort.signal,
-      onLine: (line) => {
-        const m = /PROGRESS\s+([\d.]+)%/.exec(line);
-        if (m) track.progress = Math.min(80, Math.round(parseFloat(m[1]) * 0.8));
-      },
-    },
+  const args = ytdlp(
+    '-f', 'bestaudio/best',
+    '--no-playlist',
+    '--max-filesize', `${Math.floor(config.maxSourceBytes / 1048576)}M`,
+    '--match-filter', `duration <=? ${config.maxTrackSeconds} & !is_live`,
+    '--newline',
+    '--write-info-json',
+    '--write-thumbnail',
+    '--convert-thumbnails', 'jpg',
+    '--progress-template', 'download:PROGRESS %(progress._percent_str)s',
+    '-o', path.join(dir, 'src.%(ext)s'),
+    '--', url,
   );
+  const opts = {
+    timeout: config.timeouts.download,
+    signal: job.abort.signal,
+    onLine: (line) => {
+      const m = /PROGRESS\s+([\d.]+)%/.exec(line);
+      if (m) track.progress = Math.min(80, Math.round(parseFloat(m[1]) * 0.8));
+    },
+  };
+  try {
+    await run(config.ytdlp, args, opts);
+  } catch (e) {
+    // One more try, from an empty folder, when the failure looks like a passing one.
+    if (e?.kind !== 'exit' || !PASSING.test(e.detail || '')) throw e;
+    console.warn(`[job ${job.id}] download failed once, trying again: ${(e.detail || '').slice(0, 160)}`);
+    for (const name of await fs.readdir(dir)) {
+      if (name.startsWith('src.')) await fs.rm(path.join(dir, name), { force: true }).catch(() => {});
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+    track.progress = 0;
+    await run(config.ytdlp, args, opts);
+  }
   const files = await fs.readdir(dir);
   const srcName = files.find((f) => /^src\.[a-z0-9]{1,5}$/i.test(f) && !/\.(json|jpg|jpeg|png|webp|part|ytdl)$/i.test(f));
   if (!srcName || !files.includes('src.info.json')) {

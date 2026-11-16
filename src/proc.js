@@ -11,10 +11,11 @@ childEnv.LANG = 'C.UTF-8';
 
 export class ProcError extends Error {
   /** @param {'timeout'|'aborted'|'not-installed'|'spawn-failed'|'exit'|'bad-args'|'output-too-large'} kind */
-  constructor(kind, detail = '') {
+  constructor(kind, detail = '', stdout = '') {
     super(`process ${kind}`);
     this.kind = kind;
     this.detail = detail; // internal only, never sent to a client
+    this.stdout = stdout; // what the program printed before it failed; internal only
   }
 }
 
@@ -79,7 +80,7 @@ export function run(cmd, args, { timeout = 60_000, signal, onLine, maxOutput = 6
     child.on('close', (code) => {
       if (reason) finish(new ProcError(reason, err.trim()));
       else if (code === 0) finish(null);
-      else finish(new ProcError('exit', err.trim() || `exit code ${code}`));
+      else finish(new ProcError('exit', err.trim() || `exit code ${code}`, out));
     });
   });
 }

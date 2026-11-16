@@ -4,8 +4,8 @@
 //   - only the handful of public shell files below are ever stored
 //   - /api/ is never intercepted and never cached: songs, artwork, tags and
 //     session data always go straight to the server
-const CACHE = 'mixdown-shell-v2';
-const SHELL = ['/', '/style.css', '/theme.js', '/lang.js', '/backdrop.js', '/app.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/privacy'];
+const CACHE = 'mixdown-shell-v3';
+const SHELL = ['/', '/style.css', '/theme.js', '/lang.js', '/backdrop.js', '/app.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/privacy', '/policy'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -25,7 +25,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   // A load of the app's page (also one carrying a shared link in its address)
-  // is the shell. Other pages, like /privacy, are stored under their own path.
+  // is the shell. Other pages, like /privacy and /policy, are stored under their own path.
   const key = request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html') ? '/' : url.pathname;
   if (!SHELL.includes(key)) return;
   event.respondWith(

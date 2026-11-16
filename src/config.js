@@ -106,6 +106,7 @@ export const config = {
   search: (process.env.SEARCH || 'on').toLowerCase() !== 'off', // search by song name
   inspect: (process.env.INSPECT || 'on').toLowerCase() !== 'off', // the metadata inspector (file uploads)
   inspectTypes: fileKinds('INSPECT_TYPES'), // kinds of file it accepts, judged by their bytes
+  online: (process.env.ONLINE_COUNT || 'on').toLowerCase() !== 'off', // "people here now" number in the header
   preview: (process.env.PREVIEW || 'on').toLowerCase() !== 'off', // in-page player
   previewSeconds: num('PREVIEW_MINUTES', 10, 1, 60) * 60, // longest preview kept per track
   // SoundCloud only gives a 30-second clip of some songs; fetch the full song from YouTube instead

@@ -583,6 +583,8 @@ function jobContent(job) {
     out.push(el('div', 'job-note' + (job.status === 'error' ? ' err' : ''), job.status === 'error' ? job.error : job.status === 'queued' ? t('inQueue') : t('looking')));
   }
   job.tracks.forEach((tr, i) => out.push(trackNode(job, tr, i)));
+  // Private and deleted videos of a playlist are left out; say how many.
+  if (job.skipped && job.tracks.length) out.push(el('div', 'job-note', t('skipped', { n: job.skipped })));
   if (job.expiresAt && job.tracks.some((tr) => tr.ready)) out.push(el('div', 'job-note expiry'));
   return out;
 }
@@ -632,6 +634,14 @@ function syncJobs(jobs) {
   paintPlayer();
 }
 
+// How many people have the app open right now. The number comes back with
+// the job list; null means this server has the counter switched off.
+function syncOnline(count) {
+  const shown = Number.isInteger(count) && count > 0;
+  $('#online').hidden = !shown;
+  if (shown) $('#online-count').textContent = String(count);
+}
+
 let usage = null;
 function syncMeter(next) {
   usage = next;
@@ -675,15 +685,22 @@ function collectCovers(jobs) {
 }
 
 let timer;
+let started = false; // the job list has been asked for at least once (not before the password, if there is one)
 async function refresh() {
   clearTimeout(timer);
+  started = true;
   let busy = false;
   try {
+    const params = new URLSearchParams();
     // Naming the job being listened to keeps it on the server while it plays.
-    const listening = nowKey && !player.paused ? '?playing=' + nowKey.split('/')[0] : '';
-    const data = await api('/api/jobs' + listening);
+    if (nowKey && !player.paused) params.set('playing', nowKey.split('/')[0]);
+    // A tab in the background is not counted among the people online.
+    if (document.hidden) params.set('away', '1');
+    const query = params.toString();
+    const data = await api('/api/jobs' + (query ? '?' + query : ''));
     syncJobs(data.jobs);
     syncMeter(data.usage);
+    syncOnline(data.online);
     autoDownload(data.jobs);
     collectCovers(data.jobs);
     busy = data.jobs.some((j) => j.status === 'queued' || j.status === 'running');
@@ -693,6 +710,10 @@ async function refresh() {
   }
   timer = setTimeout(refresh, busy ? 1500 : 5000);
 }
+// Coming back to the tab brings the list and the online number up to date at once.
+document.addEventListener('visibilitychange', () => {
+  if (started && !document.hidden) refresh();
+});
 
 // ---------- links, several links, or a song name ----------
 const LINK = /^(?:https?:\/\/)?(?:[\w-]+\.)*(?:youtube\.com|youtu\.be|youtube-nocookie\.com|soundcloud\.com)\/\S/i;

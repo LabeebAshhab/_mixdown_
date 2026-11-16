@@ -77,6 +77,7 @@ export function session(req, res, next) {
   const m = /(?:^|;\s*)sid=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '');
   if (m) {
     req.sid = m[1];
+    req.sidKnown = true; // the browser sent its id back: a page that is really open, not a first request
   } else {
     req.sid = randomBytes(32).toString('hex');
     const secure = config.cookieSecure || req.secure ? '; Secure' : '';

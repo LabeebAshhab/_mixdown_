@@ -22,6 +22,13 @@ export function usageFor(ip) {
   return sum;
 }
 
+/** Sessions with a link queued or in progress, for the count of people online (src/presence.js). */
+export function workingSessions() {
+  const out = [];
+  for (const job of jobs.values()) if (isOpen(job)) out.push({ sid: job.sid, ip: job.ip });
+  return out;
+}
+
 /** Everything on disk, including the small previews the in-page player uses. */
 function totalUsage() {
   let sum = 0;
@@ -170,6 +177,7 @@ export function publicJob(job) {
     status: job.status,
     title: job.title,
     error: job.error,
+    skipped: job.skipped || 0, // playlist videos left out because they are private or deleted
     createdAt: job.createdAt,
     expiresAt: job.finishedAt ? job.finishedAt + config.fileTtlMs : null,
     tracks: job.tracks.map((t) => ({

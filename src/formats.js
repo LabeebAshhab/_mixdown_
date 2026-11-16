@@ -45,6 +45,13 @@ export const FORMATS = {
         [12, 'Smallest, slowest'],
       ]),
     ],
+    // Left to itself ffmpeg makes its FLAC blocks longer as the sample rate
+    // goes up: 16384 samples at 192 kHz, four times what the reference encoder
+    // writes. To stay with what every player is tested against, blocks are
+    // fixed at 4096 samples, the reference encoder's size at every rate. The
+    // predictor order is capped at 12 as well (the highest compression level
+    // would use 32), which keeps every file inside the FLAC "subset" all
+    // decoders must play.
     args: (o) => [
       '-c:a', 'flac',
       ...(o.bitDepth === '16'
@@ -53,6 +60,8 @@ export const FORMATS = {
           ? ['-sample_fmt', 's32', '-bits_per_raw_sample', '24']
           : ['-sample_fmt', 's32', '-bits_per_raw_sample', '32', '-strict', 'experimental']),
       '-compression_level', o.compression,
+      '-frame_size', '4096',
+      '-max_prediction_order', '12',
       ...rateArgs(o),
     ],
   },

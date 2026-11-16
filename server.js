@@ -4,6 +4,7 @@ import path from 'node:path';
 import { config } from './src/config.js';
 import { initInspector } from './src/inspect.js';
 import { initStorage, shutdown } from './src/jobs.js';
+import { onlineWindowSeconds } from './src/presence.js';
 import { run } from './src/proc.js';
 import { apiRouter } from './src/routes.js';
 import { noStore, rateLimit, sameOrigin, securityHeaders, session } from './src/security.js';
@@ -36,24 +37,35 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 // https origin checked in config.js, or nothing). No request data is involved.
 const page = (await fs.readFile(path.join(config.root, 'public', 'index.html'), 'utf8')).replaceAll('%ORIGIN%', config.publicUrl);
 app.get(['/', '/index.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(page));
-// The privacy page is static too. The words between percent signs in it are
-// replaced once, at start, with this server's own settings, so it states the
-// real numbers. Every value is escaped; no request data is involved, and the
-// page calls no API, so reading it sets no cookie.
+// The privacy and usage policy pages are static too. The words between percent
+// signs in them are replaced once, at start, with this server's own settings,
+// so they state the real numbers. Every value is escaped; no request data is
+// involved, and the pages call no API, so reading them sets no cookie.
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const facts = {
   ORIGIN: config.publicUrl,
   TTL_MINUTES: Math.round(config.fileTtlMs / 60_000),
   QUOTA_GB: Math.round((config.quotaBytes / 1024 ** 3) * 10) / 10,
   PREVIEW_MINUTES: Math.round(config.previewSeconds / 60),
+  MAX_TRACKS: config.maxTracks,
+  MAX_LINKS: config.maxLinks,
+  MAX_TRACK_MINUTES: Math.round(config.maxTrackSeconds / 60),
+  MAX_JOBS: config.maxJobsPerClient,
+  MAX_UPLOAD_MB: Math.round(config.maxUploadBytes / 1024 ** 2),
+  MAX_COVER_MB: Math.round(config.maxCoverBytes / 1024 ** 2),
+  RATE_CONVERT: config.rate.convert,
+  RATE_SEARCH: config.rate.search,
+  ONLINE_SECONDS: onlineWindowSeconds,
   CREDIT_NAME: config.credits.name,
   CREDIT_GITHUB: config.credits.github,
   CREDIT_WEBSITE: config.credits.website,
 };
-const privacy = (await fs.readFile(path.join(config.root, 'public', 'privacy.html'), 'utf8')).replace(/%([A-Z_]+)%/g, (all, key) =>
-  key in facts ? escapeHtml(facts[key]) : all,
-);
-app.get(['/privacy', '/privacy.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(privacy));
+for (const name of ['privacy', 'policy']) {
+  const html = (await fs.readFile(path.join(config.root, 'public', `${name}.html`), 'utf8')).replace(/%([A-Z_]+)%/g, (all, key) =>
+    key in facts ? escapeHtml(facts[key]) : all,
+  );
+  app.get([`/${name}`, `/${name}.html`], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(html));
+}
 // The service worker is checked for updates on every visit.
 app.get('/sw.js', (_req, res, next) => {
   res.set('Cache-Control', 'no-cache');

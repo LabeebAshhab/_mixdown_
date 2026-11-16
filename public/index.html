@@ -47,6 +47,7 @@
   <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.500v5h3.500l4.500 4v-13l-4.500 4zM16 9.500l5 5M21 9.500l-5 5"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 2.800v5.700c0 4.300-2.900 7.600-7 9.500-4.100-1.900-7-5.200-7-9.500V5.800zM9 12l2.200 2.200L15.200 10"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.500"/><path d="M16 16l4.500 4.500"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6"/></symbol>
 </svg>
 
 <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i><div class="motes" id="motes"></div></div>
@@ -67,6 +68,9 @@
       <span class="logo-word" aria-hidden="true"><span class="mix"><b>m</b><b>i</b><b>x</b></span><span class="down"><b>d</b><b>o</b><b>w</b><b>n</b></span></span>
     </div>
     <div class="top-right">
+      <div class="online" id="online" data-i18n-title="onlineTitle" title="People using Mixdown right now" hidden>
+        <span class="online-dot" aria-hidden="true"></span><span id="online-count">1</span><span class="online-word" data-i18n="online">online</span>
+      </div>
       <div class="meter" id="meter" data-i18n-title="meterTitle" title="Space your finished files are using on the server">
         <span id="meter-text">0 GB of 3 GB</span>
         <span class="meter-bar"><i id="meter-fill"></i></span>
@@ -144,6 +148,7 @@
     <a id="credit-github" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-github"/></svg>GitHub</a>
     <a id="credit-website" target="_blank" rel="noopener noreferrer"><svg class="icon"><use href="#i-globe"/></svg>Website</a>
     <a href="/privacy" target="_blank" rel="noopener"><svg class="icon"><use href="#i-shield"/></svg><span data-i18n="privacy">Privacy</span></a>
+    <a href="/policy" target="_blank" rel="noopener"><svg class="icon"><use href="#i-doc"/></svg><span data-i18n="policy">Usage policy</span></a>
     <label class="lang"><svg class="icon"><use href="#i-globe"/></svg><select id="lang" data-i18n-aria="langAria" aria-label="Language"></select></label>
     <span class="foot-note" data-i18n="footNote">Only download what you have the right to.</span>
   </footer>
