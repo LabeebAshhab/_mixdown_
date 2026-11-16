@@ -41,7 +41,7 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 
 | Format | Options |
 | --- | --- |
-| FLAC | Bit depth 16 / 24 / 32, sample rate up to 192 kHz, compression level |
+| FLAC | Bit depth 16 / 24, sample rate up to 192 kHz, compression level |
 | WAV | Bit depth 16 / 24 / 32 / 32 float, sample rate up to 192 kHz |
 | AIFF | Bit depth 16 / 24 / 32, sample rate up to 192 kHz |
 | ALAC (.m4a) | Bit depth 16 / 24, sample rate up to 192 kHz |
@@ -52,7 +52,9 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 | OGG Vorbis | Quality q3 to q10, sample rate |
 | Original | No re-encoding; tags and artwork are still added |
 
-A note on quality: YouTube serves lossy audio (Opus or AAC, usually 130 to 160 kbps). Converting it to a lossless or high-resolution format preserves that audio exactly but cannot add detail that was never there, and the files get much larger. "Original" keeps the stream as delivered. 32-bit FLAC is not supported by every player.
+A note on quality: YouTube serves lossy audio (Opus or AAC, usually 130 to 160 kbps). Converting it to a lossless or high-resolution format preserves that audio exactly but cannot add detail that was never there, and the files get much larger. "Original" keeps the stream as delivered.
+
+FLAC stops at 24-bit on purpose. 32-bit FLAC is a recent addition to the format that few players read: Windows refuses such a file, and one was reported playing too fast on a hi-fi player. WAV and AIFF offer 32-bit for anyone who needs it.
 
 FLAC files are written the way the reference encoder writes them, at every sample rate: 4096-sample blocks and a predictor order of 12 at most, which is the "subset" every FLAC decoder has to support. Left alone, ffmpeg would write 16384-sample blocks at 192 kHz, four times that size.
 

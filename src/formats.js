@@ -32,10 +32,12 @@ export const FORMATS = {
     numbering: 'split',
     cover: 'attach',
     options: [
+      // No 32-bit: it is a recent addition to FLAC that few players read. Windows
+      // refuses such a file, and one was reported playing too fast on a hi-fi
+      // player. 24-bit is the most that plays everywhere; WAV and AIFF still offer 32.
       pick('bitDepth', 'Bit depth', 16, [
         [16, '16-bit'],
         [24, '24-bit'],
-        [32, '32-bit'],
       ]),
       rateOption(HIRES_RATES),
       pick('compression', 'Compression', 5, [
@@ -54,11 +56,7 @@ export const FORMATS = {
     // decoders must play.
     args: (o) => [
       '-c:a', 'flac',
-      ...(o.bitDepth === '16'
-        ? ['-sample_fmt', 's16']
-        : o.bitDepth === '24'
-          ? ['-sample_fmt', 's32', '-bits_per_raw_sample', '24']
-          : ['-sample_fmt', 's32', '-bits_per_raw_sample', '32', '-strict', 'experimental']),
+      ...(o.bitDepth === '16' ? ['-sample_fmt', 's16'] : ['-sample_fmt', 's32', '-bits_per_raw_sample', '24']),
       '-compression_level', o.compression,
       '-frame_size', '4096',
       '-max_prediction_order', '12',

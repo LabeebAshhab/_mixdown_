@@ -1,6 +1,6 @@
 FROM node:22-trixie-slim
 
-# ffmpeg 7 for conversion (needed for 32-bit FLAC), python3 for yt-dlp.
+# ffmpeg 7 for conversion, python3 for yt-dlp.
 # The yt-dlp download is verified against the release's published checksums.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg python3 ca-certificates curl \
