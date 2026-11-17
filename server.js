@@ -37,15 +37,18 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 // https origin checked in config.js, or nothing). No request data is involved.
 const page = (await fs.readFile(path.join(config.root, 'public', 'index.html'), 'utf8')).replaceAll('%ORIGIN%', config.publicUrl);
 app.get(['/', '/index.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(page));
-// The privacy and usage policy pages are static too. The words between percent
-// signs in them are replaced once, at start, with this server's own settings,
-// so they state the real numbers. Every value is escaped; no request data is
-// involved, and the pages call no API, so reading them sets no cookie.
+// Privacy and the usage policy are one static page, "Privacy & Policy". The
+// words between percent signs in it are replaced once, at start, with this
+// server's own settings, so it states the real numbers. Every value is escaped;
+// no request data is involved, and the page calls no API, so reading it sets
+// no cookie. The policy's old address leads to its part of the page.
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const facts = {
   ORIGIN: config.publicUrl,
   TTL_MINUTES: Math.round(config.fileTtlMs / 60_000),
   QUOTA_GB: Math.round((config.quotaBytes / 1024 ** 3) * 10) / 10,
+  IP_QUOTA_GB: Math.round((config.ipQuotaBytes / 1024 ** 3) * 10) / 10,
+  MAX_PLAYLIST_GB: Math.round((config.maxJobBytes / 1024 ** 3) * 10) / 10,
   PREVIEW_MINUTES: Math.round(config.previewSeconds / 60),
   MAX_TRACKS: config.maxTracks,
   MAX_LINKS: config.maxLinks,
@@ -60,12 +63,11 @@ const facts = {
   CREDIT_GITHUB: config.credits.github,
   CREDIT_WEBSITE: config.credits.website,
 };
-for (const name of ['privacy', 'policy']) {
-  const html = (await fs.readFile(path.join(config.root, 'public', `${name}.html`), 'utf8')).replace(/%([A-Z_]+)%/g, (all, key) =>
-    key in facts ? escapeHtml(facts[key]) : all,
-  );
-  app.get([`/${name}`, `/${name}.html`], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(html));
-}
+const legal = (await fs.readFile(path.join(config.root, 'public', 'privacy.html'), 'utf8')).replace(/%([A-Z_]+)%/g, (all, key) =>
+  key in facts ? escapeHtml(facts[key]) : all,
+);
+app.get(['/privacy', '/privacy.html'], (_req, res) => res.set('Cache-Control', 'public, max-age=300').type('html').send(legal));
+app.get(['/policy', '/policy.html'], (_req, res) => res.redirect(302, '/privacy#policy'));
 // The service worker is checked for updates on every visit.
 app.get('/sw.js', (_req, res, next) => {
   res.set('Cache-Control', 'no-cache');
@@ -79,7 +81,7 @@ app.use((_req, res) => res.status(404).type('text/plain').send('Not found'));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
   if (res.headersSent) return res.destroy();
-  if (err?.public) return res.status(err.status || 400).json({ error: err.message });
+  if (err?.public) return res.status(err.status || 400).json(err.why ? { error: err.message, why: err.why } : { error: err.message });
   if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'That request was too large.' });
   if (err?.type?.startsWith?.('entity.') || err instanceof SyntaxError) return res.status(400).json({ error: 'That request could not be read.' });
   console.error(`[http] ${req.method} ${req.path}:`, err);
@@ -92,7 +94,11 @@ console.log(`inspector: ${await initInspector()}`);
 
 const server = app.listen(config.port, () => {
   console.log(`mixdown listening on http://localhost:${config.port}`);
-  console.log(`storage: ${config.dataDir} | per-visitor limit ${(config.quotaBytes / 1024 ** 3).toFixed(1)} GB | files kept ${config.fileTtlMs / 60_000} min`);
+  console.log(
+    `storage: ${config.dataDir} | limit ${(config.quotaBytes / 1024 ** 3).toFixed(1)} GB per browser, ${(config.ipQuotaBytes / 1024 ** 3).toFixed(1)} GB per address | files kept ${config.fileTtlMs / 60_000} min`,
+  );
+  // Without the Secure flag the session cookie, which decides whose files are whose, could travel over plain http.
+  if (config.publicUrl && !config.cookieSecure) console.warn('PUBLIC_URL is an https address but COOKIE_SECURE is not 1: set it so the session cookie is only ever sent over https.');
   if (config.accessPassword) console.log('access password: enabled');
 });
 server.headersTimeout = 20_000;

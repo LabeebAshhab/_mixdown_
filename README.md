@@ -31,11 +31,11 @@ Built by [Labeeb Ashhab](https://me.astroit.org) ([GitHub](https://github.com/La
 - **Metadata inspector**: drop an audio file (MP3, FLAC, WAV, AIFF, M4A, Ogg, Opus, DSF or Matroska) to read its tags, artwork and audio properties; the server's administrator chooses which kinds are accepted, or switches it off
 - **Full-screen glass interface** with light and dark themes, an animated logo and a smooth theme switch
 - **Album art backdrop**: the covers of your last songs drift in 3D behind the glass, blurred and very dim; they are kept in your browser only, never on the server
-- **Storage limit per visitor** (3 GB by default); files are deleted from the server the moment they are downloaded
+- **Storage limit per browser** (3 GB by default), with a cap per IP address; files are deleted from the server the moment they are downloaded
+- **Playlists of any size in parts**: a playlist larger than the limit pauses when the space is full, lists the songs still waiting, and carries on by itself once the ready part is downloaded; each part is a zip with the same folder inside, and downloaded songs get a check mark
 - **Hardened for public hosting**: see [Security](#security)
 - **People online**: a small live number in the header shows how many visitors are using the app right now; it is a count only, kept in memory, and can be switched off
-- **A privacy page** at `/privacy`, linked in the footer: what the server handles, which services it contacts and when everything is deleted, stating this server's own retention time and limits
-- **A usage policy** at `/policy`, next to it: what the app may be used for, this server's own limits, and what to expect from the files
+- **Privacy & Policy** at `/privacy`, one page linked in the footer. Its privacy part says what the server handles, which services it contacts and when everything is deleted; its usage policy part says what the app may be used for and what to expect from the files. Both state this server's own retention time and limits
 
 ## Formats and options
 
@@ -74,7 +74,7 @@ Open <http://localhost:8080>.
 - Paste several links separated by spaces or new lines to get them all in one go.
 - Press the play button on a cover to listen, and set the volume next to the seek bar; press the pencil to correct the tags.
 - Open "Inspect a file" and drop a song in to see what is inside it.
-- The footer has the language menu and the links to the privacy page and the usage policy.
+- The footer has the language menu and the link to the Privacy & Policy page.
 
 To change settings, copy `.env.example` to `.env`, edit it, and run the same command again. To update yt-dlp later (needed when YouTube changes something), rebuild without the cache:
 
@@ -126,10 +126,12 @@ All settings are environment variables; `.env.example` lists every one with its 
 | --- | --- | --- |
 | `ACCESS_PASSWORD` | empty | Require a password to use the app |
 | `TRUST_PROXY` | empty | Number of reverse proxies in front of the app |
-| `QUOTA_GB` | `3` | Space one visitor may have waiting to be downloaded |
+| `QUOTA_GB` | `3` | Space one browser may have waiting to be downloaded |
+| `IP_QUOTA_GB` | twice `QUOTA_GB` | Space all the browsers at one IP address may have waiting together |
 | `TOTAL_STORAGE_GB` | `20` | Space all visitors together may use |
-| `FILE_TTL_MINUTES` | `15` | How long a finished file waits before it is deleted |
+| `FILE_TTL_MINUTES` | `15` | How long a finished file waits before it is deleted, and how long a paused playlist waits before it is cancelled |
 | `MAX_TRACKS` | `100` | Tracks taken from one playlist |
+| `MAX_PLAYLIST_GB` | `30` | Most that one link may add up to, over all its parts |
 | `MAX_LINKS` | `25` | Song links accepted in one paste |
 | `MAX_TRACK_MINUTES` | `90` | Longest single video |
 | `MAX_CONCURRENT` | `2` | Links processed at the same time |
@@ -151,10 +153,14 @@ All settings are environment variables; `.env.example` lists every one with its 
 
 ## How storage works
 
-- Every finished file counts towards the visitor's limit until it is downloaded.
-- A file is deleted from the server as soon as its download completes. The space is then free again, so a visitor can download 3 GB and start over.
-- A track that would not fit is refused before it is converted.
-- Files nobody downloads are deleted after `FILE_TTL_MINUTES`. A sweep runs every minute and also removes anything left behind by a crash.
+- Every finished file counts towards its browser's limit (`QUOTA_GB`, counted by the session cookie) until it is downloaded. Everything held from one IP address is capped as well (`IP_QUOTA_GB`), because a cookie can be thrown away.
+- A file is deleted from the server as soon as its download completes. The space is then free again.
+- A playlist larger than the limit is made a part at a time. When the next song would not fit, the job stops and gives its worker back; the songs still to come are only titles and links in memory, so nothing more is fetched or stored. The page lists them under "Waiting for space" and offers the ready part as a zip (downloaded automatically when "Download as soon as it's ready" is on). When that download completes, the job rejoins the back of the queue and carries on. Every part's zip holds the same folder name and the songs keep their playlist numbers, so the parts unpack into one folder.
+- A paused job whose ready part is not downloaded within `FILE_TTL_MINUTES` is cancelled as a whole: its files are deleted and the rest is never fetched. The time is counted from the visitor's last download, so a job that nobody is collecting cannot keep itself alive.
+- A song larger than the whole limit is refused. So is one that cannot fit because other browsers at the same address hold the shared space while this browser has nothing of its own to download: waiting could not help.
+- One link may add up to `MAX_PLAYLIST_GB` over all its parts.
+- Files nobody downloads are deleted after `FILE_TTL_MINUTES`, but never while they are being sent. A sweep runs every minute and also removes anything left behind by a crash.
+- A fully downloaded job stays for 45 seconds, showing its check marks, and is then removed.
 - Each finished track also has a small MP3 preview for the player (about 0.7 MB per minute, at most `PREVIEW_MINUTES` long). Previews do not count towards a visitor's limit, do count towards `TOTAL_STORAGE_GB`, and are deleted with their job. A job you are listening to stays until its usual expiry even after its files are downloaded.
 - Nothing is kept across restarts.
 
@@ -172,9 +178,9 @@ The app is written to be exposed to untrusted visitors.
 
 **Uploads to the inspector.** A stranger's file is the riskiest thing the server accepts, so it passes several layers (`src/inspect.js`). The request must be raw bytes with a declared length inside the limit, not a form and not compressed, and it must arrive within `UPLOAD_TIMEOUT_SEC`; one upload per visitor and two in all are handled at a time. The file is written under a random name and its own name is never sent. It is then read by a separate short-lived process (`src/inspect-child.js`) that may read only the app's own code and that one file: it cannot write, start programs, load native code or build code from text (Node's permission model, where the runtime has it), its memory is capped, and it is killed after 30 seconds. Only the kinds listed in `INSPECT_TYPES` are accepted, decided from the file's first bytes and again from what the reader really found, so renaming a file changes nothing. A file that crashes, hangs or exhausts that process takes down only that process. Every field of its answer is checked against a strict schema before it is sent on; embedded artwork is shown only when its bytes really are a JPEG, PNG, GIF or WebP; tag text has control and direction characters removed and is placed in the page as text, never as HTML. The file is deleted whatever happens. `INSPECT=off` removes the feature.
 
-**Resource limits.** Token-bucket rate limits per address (overall, new links, searches, edits, uploads, password attempts); caps on simultaneous searches and edits; a worker queue with a concurrency cap; hard timeouts that kill any subprocess; limits on source size, track length, playlist length, upload size, and per-visitor and total storage.
+**Resource limits.** Token-bucket rate limits per address (overall, new links, searches, edits, uploads, password attempts); caps on simultaneous searches and edits; a worker queue with a concurrency cap; hard timeouts that kill any subprocess; limits on source size, track length, playlist length, upload size, and storage per browser, per address, per playlist and in total. A playlist paused for space holds no worker and fetches nothing, is cancelled if its ready part is left waiting, and resumes at the back of the queue.
 
-**Isolation between visitors.** Each browser gets a random session id in an `HttpOnly`, `SameSite=Strict` cookie. Jobs can only be listed, downloaded, played, edited or removed by the session that created them. Requests started by another site are refused, reads included (`Sec-Fetch-Site`), and writes must also carry this site's own `Origin`. A link shared into the installed app, or passed in the address, is only placed in the field: nothing starts until the visitor presses the button, so a crafted link cannot start a download on someone else's behalf. The number of people online is a total and nothing more: it counts sessions whose browser sent its cookie back, at most ten per address, so a flood of requests cannot inflate it.
+**Isolation between visitors.** Each browser gets a random session id in an `HttpOnly`, `SameSite=Strict` cookie. Jobs can only be listed, downloaded, played, edited or removed by the session that created them. Space is counted per session, so visitors behind one address cannot use up each other's, and capped per address, so a new cookie does not buy more. Serve the site over HTTPS with `COOKIE_SECURE=1`: the cookie is what makes a visitor's waiting files theirs, and the server warns at start when `PUBLIC_URL` is set without it. Requests started by another site are refused, reads included (`Sec-Fetch-Site`), and writes must also carry this site's own `Origin`. A link shared into the installed app, or passed in the address, is only placed in the field: nothing starts until the visitor presses the button, so a crafted link cannot start a download on someone else's behalf. The number of people online is a total and nothing more: it counts sessions whose browser sent its cookie back, at most ten per address, so a flood of requests cannot inflate it.
 
 **Headers and errors.** A strict Content-Security-Policy (no inline scripts or styles, no third-party hosts; media, manifest and service worker from the site itself only), `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and HSTS over HTTPS. Error responses are short sentences; stack traces, paths and tool output stay in the server log.
 
@@ -216,8 +222,8 @@ src/inspect.js     the inspector's upload checks, and the confined process it re
 src/inspect-child.js   that process: reads one upload, prints what it found
 src/inspect-types.js   the kinds of file the inspector accepts and how they are recognised
 src/dsd.js         PCM to DSD encoder
-public/            interface (app.js), translations (lang.js), backdrop (backdrop.js), privacy page (privacy.html),
-                   usage policy (policy.html), installable-app files (manifest.webmanifest, sw.js, icons/), link preview (og.png)
+public/            interface (app.js), translations (lang.js), backdrop (backdrop.js), Privacy & Policy page (privacy.html),
+                   installable-app files (manifest.webmanifest, sw.js, icons/), link preview (og.png)
 docs/              screenshots
 ```
 

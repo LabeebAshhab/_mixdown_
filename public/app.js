@@ -46,6 +46,7 @@ async function api(path, opts) {
     const err = new Error(data.error || t('oops'));
     err.status = res.status;
     err.locked = !!data.locked;
+    err.why = data.why || null;
     throw err;
   }
   return data;
@@ -61,9 +62,23 @@ function toast(message, bad) {
   }, 4200);
 }
 
-function showAlert(id, message) {
+// Some messages are explained on the Privacy & Policy page. The server names
+// the part; only the parts listed here ever become a link.
+const WHY = { 'shared-space': '/privacy#shared-space' };
+function whyLink(why) {
+  if (!Object.hasOwn(WHY, why)) return null;
+  const a = el('a', 'why', t('why'));
+  a.href = WHY[why];
+  a.target = '_blank';
+  a.rel = 'noopener';
+  return a;
+}
+
+function showAlert(id, message, why) {
   const box = $(id);
   box.textContent = message || '';
+  const link = message && why ? whyLink(why) : null;
+  if (link) box.append(' ', link);
   box.hidden = !message;
 }
 
@@ -474,6 +489,12 @@ function trackNode(job, tr, i) {
     play.addEventListener('click', () => togglePlay(key));
     art.append(play);
   }
+  if (tr.status === 'collected') {
+    // A check mark on the cover: this song is on the visitor's device now.
+    const got = el('span', 'got');
+    got.append(icon('check'));
+    art.append(got);
+  }
   row.append(art);
 
   const body = el('div', 'track-body');
@@ -481,7 +502,12 @@ function trackNode(job, tr, i) {
   const m = tr.meta;
 
   if (tr.status === 'error') {
-    body.append(el('div', 'track-sub err', tr.error || t('trackError')));
+    const failed = el('div', 'track-sub err', tr.error || t('trackError'));
+    const link = tr.why ? whyLink(tr.why) : null;
+    if (link) failed.append(' ', link);
+    body.append(failed);
+  } else if (tr.status === 'cancelled') {
+    body.append(el('div', 'track-sub', t('cancelled')));
   } else if (tr.status === 'collected') {
     const saved = el('div', 'track-sub saved');
     saved.append(icon('check'), t('collected'));
@@ -557,14 +583,29 @@ function trackNode(job, tr, i) {
   return row;
 }
 
+// The songs of a playlist that are held back until there is room for them,
+// shown as one group instead of a row each.
+function waitGroup(list) {
+  const box = el('div', 'wait-group');
+  box.append(el('div', 'wait-head', t('waitGroup', { n: list.length })));
+  const names = el('ul', 'wait-list');
+  for (const tr of list) names.append(el('li', null, tr.title));
+  box.append(names);
+  return box;
+}
+
+// A playlist too large for the visitor's space comes in several zips.
+const inParts = (job) => job.part > 0 || job.zips > 0;
+
 function jobContent(job) {
   const head = el('div', 'job-head');
   head.append(el('div', 'job-title', job.title), el('span', 'badge', job.format));
-  if (job.tracks.filter((tr) => tr.ready).length > 1) {
+  const ready = job.tracks.filter((tr) => tr.ready).length;
+  if (inParts(job) ? ready > 0 : ready > 1) {
     const zip = el('a', 'btn');
     zip.href = '/api/jobs/' + job.id + '/zip';
     zip.setAttribute('download', '');
-    zip.append(icon('down'), t('downloadAll'));
+    zip.append(icon('down'), inParts(job) ? t('downloadPart', { n: job.zips + 1 }) : t('downloadAll'));
     head.append(zip);
   }
   const rm = el('button', 'ghost');
@@ -582,10 +623,25 @@ function jobContent(job) {
   if (!job.tracks.length) {
     out.push(el('div', 'job-note' + (job.status === 'error' ? ' err' : ''), job.status === 'error' ? job.error : job.status === 'queued' ? t('inQueue') : t('looking')));
   }
-  job.tracks.forEach((tr, i) => out.push(trackNode(job, tr, i)));
+  const got = job.tracks.filter((tr) => tr.status === 'collected').length;
+  if (got && job.tracks.length > 1) {
+    const count = el('div', 'job-note got-count');
+    count.append(icon('check'), t('gotCount', { n: got, total: job.tracks.length }));
+    out.push(count);
+  }
+  if (job.expired) out.push(el('div', 'job-note err', t('expiredNote')));
+  const waiting = job.status === 'waiting';
+  if (waiting) {
+    // What to do, and how long there is to do it, come before the list of songs.
+    out.push(el('div', 'job-note hold', t(ready ? 'waitNote' : 'waitOther')));
+    out.push(el('div', 'job-note expiry'));
+  }
+  const held = [];
+  job.tracks.forEach((tr, i) => (tr.status === 'waiting' ? held.push(tr) : out.push(trackNode(job, tr, i))));
+  if (held.length) out.push(waitGroup(held));
   // Private and deleted videos of a playlist are left out; say how many.
   if (job.skipped && job.tracks.length) out.push(el('div', 'job-note', t('skipped', { n: job.skipped })));
-  if (job.expiresAt && job.tracks.some((tr) => tr.ready)) out.push(el('div', 'job-note expiry'));
+  if (!waiting && job.expiresAt && ready) out.push(el('div', 'job-note expiry'));
   return out;
 }
 
@@ -618,7 +674,8 @@ function syncJobs(jobs) {
     const expiry = card.node.querySelector('.expiry');
     if (expiry) {
       const mins = Math.max(0, Math.ceil((job.expiresAt - Date.now()) / 60000));
-      expiry.textContent = mins > 1 ? t('expiry', { n: mins }) : t('expirySoon');
+      const wait = job.status === 'waiting';
+      expiry.textContent = mins > 1 ? t(wait ? 'waitExpiry' : 'expiry', { n: mins }) : t(wait ? 'waitExpirySoon' : 'expirySoon');
     }
     if (list.children[index] !== card.node) list.insertBefore(card.node, list.children[index] || null);
   });
@@ -652,21 +709,28 @@ function syncMeter(next) {
 }
 
 // Jobs started from this tab are saved by the browser as soon as they finish:
-// the single file, or one zip holding the whole playlist.
-const mine = new Set();
+// the single file, or one zip holding the whole playlist. A playlist too large
+// for the visitor's space stops each time the space is full; the part that is
+// ready is saved then, which frees the space and lets the playlist carry on.
+const mine = new Map(); // job id -> how many of its stops have been handled
 function autoDownload(jobs) {
   for (const job of jobs) {
-    if (!mine.has(job.id) || (job.status !== 'done' && job.status !== 'error')) continue;
-    mine.delete(job.id);
+    if (!mine.has(job.id)) continue;
+    const over = job.status === 'done' || job.status === 'error';
+    if (!over && !(job.status === 'waiting' && job.part > mine.get(job.id))) continue;
+    if (over) mine.delete(job.id);
+    else mine.set(job.id, job.part);
     const ready = job.tracks.map((tr, i) => (tr.ready ? i : -1)).filter((i) => i >= 0);
     if (!ready.length || !$('#opt-auto').checked) continue;
+    // Every part is a zip, even a part of one song, so that all of them unpack into the same folder.
+    const zip = inParts(job) || ready.length > 1;
     const a = el('a');
-    a.href = ready.length > 1 ? '/api/jobs/' + job.id + '/zip' : '/api/jobs/' + job.id + '/files/' + ready[0];
+    a.href = zip ? '/api/jobs/' + job.id + '/zip' : '/api/jobs/' + job.id + '/files/' + ready[0];
     a.setAttribute('download', '');
     document.body.append(a);
     a.click();
     a.remove();
-    toast(ready.length > 1 ? t('toastPlaylist') : t('toastSong'));
+    toast(inParts(job) ? t('toastPart', { n: job.zips + 1 }) : zip ? t('toastPlaylist') : t('toastSong'));
   }
 }
 
@@ -690,6 +754,7 @@ async function refresh() {
   clearTimeout(timer);
   started = true;
   let busy = false;
+  let held = false; // a playlist is waiting for space: look again soon, it carries on once a part is downloaded
   try {
     const params = new URLSearchParams();
     // Naming the job being listened to keeps it on the server while it plays.
@@ -704,11 +769,12 @@ async function refresh() {
     autoDownload(data.jobs);
     collectCovers(data.jobs);
     busy = data.jobs.some((j) => j.status === 'queued' || j.status === 'running');
+    held = data.jobs.some((j) => j.status === 'waiting');
     $('#eq').classList.toggle('live', busy);
   } catch (err) {
     if (err.locked) return showLock();
   }
-  timer = setTimeout(refresh, busy ? 1500 : 5000);
+  timer = setTimeout(refresh, busy ? 1500 : held ? 2500 : 5000);
 }
 // Coming back to the tab brings the list and the online number up to date at once.
 document.addEventListener('visibilitychange', () => {
@@ -761,7 +827,7 @@ async function startJob(urls) {
   if (urls.length > 1) body.urls = urls;
   else body.url = urls[0];
   const job = await postJson('/api/jobs', body);
-  mine.add(job.id);
+  mine.set(job.id, 0);
   input.value = '';
   paintButton();
   hideResults();
@@ -793,7 +859,7 @@ async function search(query) {
         try {
           await startJob([r.url]);
         } catch (err) {
-          showAlert('#alert', err.message);
+          showAlert('#alert', err.message, err.why);
           box.querySelectorAll('button').forEach((b) => (b.disabled = false));
         }
       });
@@ -815,7 +881,7 @@ $('#form').addEventListener('submit', async (e) => {
     else await search(typed.query.slice(0, 100));
   } catch (err) {
     hideResults();
-    showAlert('#alert', err.message);
+    showAlert('#alert', err.message, err.why);
   } finally {
     btn.disabled = false;
   }
@@ -945,7 +1011,7 @@ function paintStatic() {
   paintButton();
   if (!boot) return;
   $('#fineprint').textContent =
-    t('fineprint', { min: boot.limits.ttlMinutes, gb: fmtGb(boot.limits.quotaBytes) }) + ' ' + t('sitesNote', { sites: boot.sites.join(', ') });
+    [t('fineprint', { min: boot.limits.ttlMinutes, gb: fmtGb(boot.limits.quotaBytes) }), t('fineprintParts'), t('sitesNote', { sites: boot.sites.join(', ') })].join(' ');
   $('#inspect-text').textContent = t('inspectText', { types: inspectKinds() });
   renderFormats();
   if (usage) syncMeter(usage);

@@ -182,7 +182,7 @@ export function apiRouter({ ready }) {
       if (req.sidKnown && req.query.away !== '1') checkIn(req.sid, req.ip);
       online = onlineCount(workingSessions());
     }
-    res.json({ jobs: mine.map(publicJob), usage: { used: usageFor(req.ip), quota: config.quotaBytes }, online });
+    res.json({ jobs: mine.map(publicJob), usage: { used: usageFor(req.sid), quota: config.quotaBytes }, online });
   });
 
   r.post('/jobs', rateLimit(config.rate.convert), json, (req, res) => {
@@ -304,7 +304,9 @@ export function apiRouter({ ready }) {
     );
   });
 
-  // Whole playlist as one zip with an album folder. Files are deleted once sent.
+  // Everything that is ready as one zip with an album folder. Files are deleted
+  // once sent. A playlist too large for the visitor's space comes in several
+  // zips; each holds the same folder name, so they unpack into one folder.
   r.get('/jobs/:id/zip', (req, res) => {
     if (req.method !== 'GET') return res.status(405).end();
     const job = ownedJob(req);
@@ -312,7 +314,9 @@ export function apiRouter({ ready }) {
     if (!ready.length) throw new PublicError('Nothing is ready to download yet.', 404);
     const folder = zipName(job.title.replace(/^Album\s+-\s+/, ''), 'Playlist').slice(0, 120);
     for (const t of ready) t.sending = true;
-    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': contentDisposition(`${folder}.zip`), 'Cache-Control': 'no-store' });
+    const inParts = job.part > 0 || job.zips > 0;
+    const zipFile = inParts ? `${folder} (part ${job.zips + 1}).zip` : `${folder}.zip`;
+    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': contentDisposition(zipFile), 'Cache-Control': 'no-store' });
 
     const zip = archiver('zip', { store: true });
     let failed = false;
@@ -322,8 +326,10 @@ export function apiRouter({ ready }) {
     });
     res.on('close', () => {
       for (const t of ready) t.sending = false;
-      if (!failed && res.writableFinished) for (const t of ready) collectTrack(job, t).catch(() => {});
-      else zip.abort();
+      if (!failed && res.writableFinished) {
+        job.zips++;
+        for (const t of ready) collectTrack(job, t).catch(() => {});
+      } else zip.abort();
     });
     zip.pipe(res);
     for (const t of ready) {

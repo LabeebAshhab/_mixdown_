@@ -276,6 +276,15 @@ h2 { font-size: 17px; font-weight: 640; letter-spacing: -.01em; margin-bottom: 4
 .btn .icon { width: 15px; height: 15px; stroke-width: 2.1; }
 .job-note { padding: 4px 0 12px; font-size: 13.5px; color: var(--muted); }
 .job-note.err { color: var(--bad); }
+.job-note.hold { padding-bottom: 2px; color: var(--warn); }
+.job-note.got-count { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; color: var(--ok); }
+.job-note.got-count .icon { width: 15px; height: 15px; stroke-width: 2.4; }
+
+/* songs of a playlist held back until there is room for them */
+.wait-group { padding: 11px 0 12px; border-top: 1px solid var(--line); }
+.wait-head { margin-bottom: 6px; font-size: 13px; font-weight: 620; color: var(--warn); }
+.wait-list { max-height: 186px; margin: 0; padding: 0; overflow-y: auto; list-style: none; font-size: 13px; color: var(--muted); }
+.wait-list li { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .track { display: flex; gap: 13px; align-items: center; padding: 11px 0; border-top: 1px solid var(--line); }
 .art { width: 54px; height: 54px; border-radius: 11px; flex: none; display: grid; place-items: center; overflow: hidden; color: var(--faint); background: var(--surface-2); border: 1px solid var(--line); }
@@ -288,6 +297,9 @@ h2 { font-size: 17px; font-weight: 640; letter-spacing: -.01em; margin-bottom: 4
 .art-play .icon { grid-area: 1 / 1; width: 22px; height: 22px; fill: currentColor; stroke-width: 2.2; }
 .track:hover .art-play, .art-play:focus-visible, .track.current .art-play { opacity: 1; }
 .art-play .when-playing, .track.playing .art-play .when-paused { display: none; }
+/* downloaded: a check mark in the corner of the cover */
+.got { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--bg); background: var(--ok); box-shadow: 0 1px 3px rgba(0, 0, 0, .35); pointer-events: none; }
+.got .icon { width: 12px; height: 12px; stroke-width: 3.2; }
 .track.playing .art-play .when-playing { display: block; }
 @media (hover: none) { .art-play { opacity: 1; background: rgba(0, 0, 0, .28); } }
 .seek-row { display: none; align-items: center; gap: 10px; margin-top: 6px; }
@@ -333,6 +345,9 @@ h2 { font-size: 17px; font-weight: 640; letter-spacing: -.01em; margin-bottom: 4
 .track-title { font-weight: 570; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .track-sub { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .track-sub.err { color: var(--bad); white-space: normal; }
+/* "Why this happens": a link after a message that the Privacy & Policy page explains */
+.why { font-weight: 600; white-space: nowrap; text-decoration: underline; text-underline-offset: 3px; }
+.why:hover { color: var(--text); }
 .track-sub.saved { color: var(--ok); display: flex; align-items: center; gap: 5px; }
 .track-sub.saved .icon { width: 14px; height: 14px; stroke-width: 2.4; }
 .bar { height: 4px; border-radius: 4px; background: var(--line); margin-top: 8px; overflow: hidden; }
@@ -439,8 +454,14 @@ body.doc-page { overflow: auto; }
 .doc-back .icon { width: 15px; height: 15px; }
 .doc-body { flex: 1; margin: 4px var(--gutter) 10px; padding: clamp(20px, 4.5vw, 44px); border-radius: 24px; animation: rise .6s .1s var(--ease) both; }
 .doc-body h1 { margin-bottom: 4px; }
-.doc-body h2 { margin: 36px 0 10px; font-size: 19px; }
-.doc-body h3 { margin: 22px 0 4px; font-size: 15px; font-weight: 640; }
+/* h2 opens one of the page's parts (Privacy, Usage policy); h3 and h4 are its sections */
+.doc-body h2 { margin: 46px 0 6px; padding-top: 30px; border-top: 1px solid var(--line); font-size: 25px; letter-spacing: -.02em; scroll-margin-top: 12px; }
+.doc-body h3 { margin: 34px 0 10px; font-size: 19px; font-weight: 640; letter-spacing: -.01em; scroll-margin-top: 16px; }
+.doc-body h4 { margin: 22px 0 4px; font-size: 15px; font-weight: 640; }
+.doc-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.doc-body .doc-nav a { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); font-size: 13.5px; font-weight: 600; text-decoration: none; transition: border-color .2s, background-color .2s; }
+.doc-body .doc-nav a:hover { border-color: var(--line-strong); background: var(--soft); }
+.doc-nav .icon { width: 15px; height: 15px; }
 .doc-body p, .doc-body ul { max-width: 74ch; margin: 0 0 12px; }
 .doc-body ul { padding-left: 20px; }
 .doc-body li { margin: 5px 0; }
@@ -451,7 +472,7 @@ body.doc-page { overflow: auto; }
 .doc-date { color: var(--faint); font-size: 13px; }
 .doc-lead { margin-top: 14px; font-size: 16px; color: var(--muted); }
 .doc-summary { margin: 22px 0 4px; padding: 16px 20px 8px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2); }
-.doc-summary h2 { margin: 0 0 8px; font-size: 16px; }
+.doc-summary h3 { margin: 0 0 8px; font-size: 16px; }
 .doc-table-wrap { margin: 0 0 14px; overflow-x: auto; }
 .doc-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 14px; }
 .doc-table th { padding: 8px 14px 8px 0; text-align: left; font-size: 12.5px; font-weight: 620; color: var(--muted); border-bottom: 1px solid var(--line-strong); }

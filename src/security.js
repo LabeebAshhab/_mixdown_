@@ -196,12 +196,18 @@ export function contentDisposition(name) {
 
 // ------------------------------------------------------------ errors
 
-/** Thrown on purpose with a message that is safe to show to a visitor. */
+/**
+ * Thrown on purpose with a message that is safe to show to a visitor. `why`
+ * names a part of the Privacy & Policy page that explains the message; the
+ * page shows a "Why this happens" link to it. It is one of a few fixed words,
+ * never text from a request.
+ */
 export class PublicError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, why = null) {
     super(message);
     this.status = status;
     this.public = true;
+    this.why = why;
   }
 }
 

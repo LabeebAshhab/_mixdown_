@@ -29,14 +29,26 @@ function ytdlp(...args) {
   return [...base, ...args];
 }
 
-/** @param {{site: string, url: string}} source a checked link (see src/sources.js) */
-export const newTrack = (source, title) => ({
+/**
+ * @param {{site: string, url: string}} source a checked link (see src/sources.js)
+ * @param {number} [seconds] the song's length, when the playlist says it
+ */
+export const newTrack = (source, title, seconds) => ({
   site: source.site,
   url: source.url,
   title: cleanText(title, 200) || 'Loading…',
   status: 'queued',
   progress: 0,
+  seconds: Number.isFinite(seconds) && seconds > 0 ? seconds : null,
 });
+
+/** The song does not fit in the visitor's space yet. The job waits for room (src/jobs.js); it is not a failure. */
+class NoRoom extends Error {
+  constructor(need) {
+    super('no room');
+    this.need = need;
+  }
+}
 
 // How YouTube names a playlist entry whose video is private or has been deleted.
 const GONE_TITLE = /^\[(?:private|deleted) video\]$/i;
@@ -100,14 +112,14 @@ export async function resolveSource(job) {
   const hidden = job.site === 'youtube' && Number.isInteger(total) && total <= config.maxTracks ? Math.max(0, total - listed.length) : 0;
   job.skipped = hidden + (listed.length - usable.length);
   const entries = usable
-    .map((e) => ({ source: parseEntry(job.site, e), title: e.title }))
+    .map((e) => ({ source: parseEntry(job.site, e), title: e.title, seconds: Number(e.duration) }))
     .filter((e) => e.source)
     .slice(0, config.maxTracks);
   if (!entries.length) {
     throw new PublicError(job.skipped ? 'Every video in that playlist is private or no longer available.' : 'That playlist is empty or private.');
   }
   job.title = cleanText(info.title, 200) || 'Playlist';
-  job.tracks = entries.map((e) => newTrack(e.source, e.title));
+  job.tracks = entries.map((e) => newTrack(e.source, e.title, e.seconds));
 }
 
 // ------------------------------------------------------------ search by name
@@ -582,15 +594,15 @@ export async function processTrack(job, track, index) {
     const { source, info } = got; // `info` describes the audio that will be converted
     track.source = { codec: cleanText(info.acodec, 20), bitrate: Number.isFinite(info.abr) ? Math.round(info.abr) : null };
 
-    // Refuse before converting if the result would not fit in the visitor's space.
-    const estimate = estimateBytes(job.format, job.options, {
+    // Stop before converting if the result would not fit in the visitor's
+    // space. A song that can never fit is refused; otherwise the job waits
+    // until the visitor has downloaded what is ready.
+    const estimate = Math.max(1, Math.round(estimateBytes(job.format, job.options, {
       duration: Number(info.duration) || 0,
       sourceRate: Number(info.asr) || 48000,
       sourceBytes: (await fs.stat(source)).size,
-    });
-    if (estimate > job.room()) {
-      throw new PublicError('There is not enough of your space left for this one. Download what is ready, then add it again.');
-    }
+    })) || 1);
+    if (!job.fits(estimate)) throw new NoRoom(estimate);
 
     // 2. Identify the song: catalogue tags, album artwork, lyrics.
     track.status = 'tagging';
@@ -681,8 +693,13 @@ export async function processTrack(job, track, index) {
     track.status = 'done';
     console.log(`[job ${job.id}] track ${index + 1}/${job.tracks.length} done (${track.match.source}${found ? ', full song from YouTube' : ''}, ${fmt.ext}, ${track.size} bytes)`);
   } catch (e) {
+    if (e instanceof NoRoom) {
+      Object.assign(track, { status: 'waiting', progress: 0, need: e.need });
+      return;
+    }
     track.status = 'error';
     track.error = publicMessage(e);
+    track.why = e?.why || null;
     for (const key of ['coverBig', 'previewFile', 'lrcFile']) {
       if (track[key]) await fs.rm(insideDir(job.dir, track[key]), { force: true }).catch(() => {});
       track[key] = null;

@@ -71,7 +71,10 @@ export const config = {
   accessPassword: process.env.ACCESS_PASSWORD || '',
 
   // Storage limits
-  quotaBytes: Math.round(num('QUOTA_GB', 3, 0.05, 1000) * GIB), // per visitor, waiting to be downloaded
+  quotaBytes: Math.round(num('QUOTA_GB', 3, 0.05, 1000) * GIB), // per browser, waiting to be downloaded
+  // All browsers at one IP address together: twice the browser's share unless set, never less than it.
+  ipQuotaBytes: Math.round(Math.max(num('QUOTA_GB', 3, 0.05, 1000), num('IP_QUOTA_GB', num('QUOTA_GB', 3, 0.05, 1000) * 2, 0.05, 100000)) * GIB),
+  maxJobBytes: Math.round(num('MAX_PLAYLIST_GB', 30, 0.05, 100000) * GIB), // finished files one link may add up to, over all its parts
   totalBytes: Math.round(num('TOTAL_STORAGE_GB', 20, 0.1, 100000) * GIB), // whole server
   fileTtlMs: num('FILE_TTL_MINUTES', 15, 1, 1440) * 60_000,
   maxSourceBytes: num('MAX_SOURCE_MB', 500, 1, 100000) * MIB,
