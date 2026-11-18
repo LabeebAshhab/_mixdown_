@@ -4,6 +4,7 @@ import path from 'node:path';
 import { config } from './src/config.js';
 import { initInspector } from './src/inspect.js';
 import { initStorage, shutdown } from './src/jobs.js';
+import { catalogueLabels } from './src/metadata.js';
 import { onlineWindowSeconds } from './src/presence.js';
 import { run } from './src/proc.js';
 import { apiRouter } from './src/routes.js';
@@ -55,9 +56,19 @@ const facts = {
   MAX_TRACK_MINUTES: Math.round(config.maxTrackSeconds / 60),
   MAX_JOBS: config.maxJobsPerClient,
   MAX_UPLOAD_MB: Math.round(config.maxUploadBytes / 1024 ** 2),
+  UPLOAD_PIECE_MB: Math.round(config.uploadChunkBytes / 1024 ** 2),
+  UPLOAD_IDLE_MINUTES: Math.ceil((config.timeouts.upload + 30_000) / 60_000),
+  UPLOAD_TOTAL_MINUTES: Math.round(config.timeouts.uploadTotal / 60_000),
+  INSPECT_EDIT_NOTE:
+    config.inspect && config.inspectEdit
+      ? 'On this server a file can also be kept for a short while to have its tags corrected and be downloaded again.'
+      : 'On this server editing is switched off: every inspected file is deleted as soon as it has been read, and the rest of what is said here about kept files does not apply.',
+  // The catalogues this server really asks, in the order it asks them.
+  CATALOGUES: catalogueLabels().join(', ') || 'none (catalogue lookups are switched off)',
   MAX_COVER_MB: Math.round(config.maxCoverBytes / 1024 ** 2),
   RATE_CONVERT: config.rate.convert,
   RATE_SEARCH: config.rate.search,
+  RATE_INSPECT: config.rate.inspect,
   ONLINE_SECONDS: onlineWindowSeconds,
   CREDIT_NAME: config.credits.name,
   CREDIT_GITHUB: config.credits.github,
@@ -91,6 +102,8 @@ app.use((err, req, res, _next) => {
 await initStorage();
 await checkTools();
 console.log(`inspector: ${await initInspector()}`);
+// Names only: the keys some of them need are never printed.
+console.log(`catalogues: ${catalogueLabels().join(' > ') || 'off'}`);
 
 const server = app.listen(config.port, () => {
   console.log(`mixdown listening on http://localhost:${config.port}`);
@@ -102,7 +115,7 @@ const server = app.listen(config.port, () => {
   if (config.accessPassword) console.log('access password: enabled');
 });
 server.headersTimeout = 20_000;
-server.requestTimeout = 10 * 60_000; // long enough for an inspector upload
+server.requestTimeout = 10 * 60_000; // long enough for one piece of an inspector upload
 server.keepAliveTimeout = 30_000;
 
 for (const sig of ['SIGTERM', 'SIGINT']) {

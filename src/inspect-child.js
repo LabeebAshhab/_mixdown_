@@ -11,12 +11,22 @@
 // process. The server checks every field of what is printed here before
 // passing it on (the schema in src/inspect.js).
 //
-// usage: node inspect-child.js <file> <allowed type ids, comma separated>
+// usage: node inspect-child.js <file> <allowed type ids, comma separated> [keep]
+//
+// With "keep" the answer also holds what is needed to write the file's tags
+// again after the visitor edits them: its lyrics, the common tags the editor
+// does not show, and its picture. All of it leaves this process as plain text
+// (the picture as base64); the server checks it like the rest.
 import fs from 'node:fs/promises';
 import { sniff, typeOf } from './inspect-types.js';
 import { readAudio } from './reader/index.js';
 
 const MAX_TEXT = 300;
+const MAX_LYRICS = 100_000;
+const MAX_KEPT_PICTURE = 12 * 1024 * 1024;
+// Must match KEPT_KEYS in src/tags.js, which this process may not import from
+// (it reads only what it needs). The server's schema refuses any other name.
+const KEPT = ['composer', 'comment', 'copyright', 'grouping', 'compilation', 'bpm', 'label', 'isrc', 'subtitle', 'lyricist', 'conductor', 'remixer', 'language', 'key', 'media', 'mood'];
 
 /** Plain text: no control characters, no characters that reorder or hide text, cut to length. */
 function plain(value, max = MAX_TEXT) {
@@ -90,8 +100,42 @@ function describe({ format, common, native }) {
   };
 }
 
+/** Text that may span lines (lyrics): the same cleaning, line breaks kept. */
+function lines(value, max) {
+  return String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/** What has to survive an edit: lyrics, the common tags the editor does not show, the picture. */
+function keepable({ common }) {
+  const kept = {};
+  for (const key of KEPT) {
+    const v = common[key];
+    let text = '';
+    if (typeof v === 'boolean') text = v ? '1' : '';
+    else if (Array.isArray(v)) text = v.filter((x) => typeof x === 'string' || typeof x === 'number').map((x) => plain(x)).filter(Boolean).slice(0, 10).join('; ');
+    else if (typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v))) text = plain(v, key === 'comment' ? 2000 : MAX_TEXT);
+    if (text) kept[key] = text.slice(0, 2000);
+  }
+  const words = Array.isArray(common.lyrics) ? common.lyrics.find((x) => typeof x === 'string' && x.trim()) : null;
+  const pic = common.picture?.[0];
+  const data = pic && Buffer.isBuffer(pic.data) ? pic.data : null;
+  // Only a picture the server can re-encode travels on: JPEG, PNG or WebP of a sensible size.
+  const usable = data && ['image/jpeg', 'image/png', 'image/webp'].includes(imageType(data)) && data.length <= MAX_KEPT_PICTURE;
+  return {
+    kept,
+    lyrics: words ? lines(words, MAX_LYRICS) : null,
+    picture: usable ? data.toString('base64') : null,
+    pictureLost: !!data && !usable,
+  };
+}
+
 async function main() {
-  const [file, list] = process.argv.slice(2);
+  const [file, list, mode] = process.argv.slice(2);
   const allowed = new Set(String(list || '').split(','));
 
   // 1. The first bytes decide whether this is worth reading at all.
@@ -111,7 +155,9 @@ async function main() {
   const result = await readAudio(file, { timeoutMs: 20_000 });
   const type = typeOf(result.format);
   if (!type || !allowed.has(type)) return { ok: false, code: 'type' };
-  return { ok: true, type, report: describe(result) };
+  const answer = { ok: true, type, report: describe(result) };
+  if (mode === 'keep') answer.keep = keepable(result);
+  return answer;
 }
 
 let answer;

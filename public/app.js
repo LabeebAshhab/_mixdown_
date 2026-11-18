@@ -198,7 +198,7 @@ function renderFormats() {
 }
 
 // ---------- switches ----------
-for (const [id, def] of [['lyrics', '1'], ['synced', '0'], ['normalize', '0'], ['auto', '1'], ['album', '0']]) {
+for (const [id, def] of [['lyrics', '1'], ['synced', '0'], ['normalize', '0'], ['auto', '1'], ['album', '0'], ['keep', '1']]) {
   const box = $('#opt-' + id);
   box.checked = store.get('opt-' + id, def) === '1';
   box.addEventListener('change', () => store.set('opt-' + id, box.checked ? '1' : '0'));
@@ -384,6 +384,12 @@ function openEditor(job, index, track, row) {
     note.hidden = !text;
     note.classList.toggle('err', !!bad);
   };
+  // A file of the visitor's own: what saving does to it, said before they save.
+  const own = [];
+  if (job.kind === 'upload') {
+    own.push(el('p', 'ed-note', t('editOwn')));
+    if (track.coverLost) own.push(el('p', 'ed-note err', t('coverLost')));
+  }
 
   const file = el('input');
   file.type = 'file';
@@ -400,7 +406,7 @@ function openEditor(job, index, track, row) {
   const buttons = el('div', 'ed-buttons');
   const gap = el('span', 'ed-gap');
   buttons.append(find, pick, file, gap, cancel, save);
-  form.append(grid, note, buttons);
+  form.append(grid, ...own, note, buttons);
 
   let suggested = false; // the last lookup found album art, kept on the server
   const busy = (on) => [find, pick, cancel, save].forEach((b) => (b.disabled = on));
@@ -479,6 +485,12 @@ function trackNode(job, tr, i) {
     img.src = '/api/jobs/' + job.id + '/cover/' + i + '?v=' + tr.cover;
     img.alt = '';
     art.append(img);
+  } else if (job.kind === 'upload' && ownArt.id === job.id && tr.meta && tr.meta.cover) {
+    // A file of the visitor's own, not edited yet: the picture read from it, which this page already has.
+    const img = el('img');
+    img.src = ownArt.dataUrl;
+    img.alt = '';
+    art.append(img);
   } else {
     art.append(icon('note'));
   }
@@ -524,6 +536,7 @@ function trackNode(job, tr, i) {
     add(fmtTime(m.duration));
     add(fmtSize(tr.size));
     if (match.edited) add(t('edited'), 'ok');
+    else if (match.upload) add(t('yourFile'));
     else add(match.matched ? t('matchedOn', { source: match.source }) : match.lookupFailed ? t('lookupFailed') : t('noMatch'), match.matched ? 'ok' : 'warn');
     add(match.fullFrom ? t('fullFrom', { source: match.fullFrom }) : null);
     add(m.cover ? t('artwork') : null, 'ok');
@@ -647,10 +660,19 @@ function jobContent(job) {
 
 const cards = new Map(); // job id -> { node, sig }
 
+// The picture of the visitor's own file, as read by the inspector, for its
+// card until the file has been edited (the server makes its own copy then).
+// It lives in this page only.
+let ownArt = { id: null, dataUrl: null };
+
 function syncJobs(jobs) {
-  const list = $('#jobs');
+  // A file of the visitor's own, kept for editing, has its card on the Inspect tab.
+  const places = new Map([[$('#jobs'), 0], [$('#inspect-job'), 0]]);
   const seen = new Set();
-  jobs.forEach((job, index) => {
+  jobs.forEach((job) => {
+    const list = job.kind === 'upload' ? $('#inspect-job') : $('#jobs');
+    const index = places.get(list);
+    places.set(list, index + 1);
     seen.add(job.id);
     // Everything except the moving progress numbers decides whether to redraw.
     const sig = JSON.stringify({ ...job, tracks: job.tracks.map((tr) => ({ ...tr, progress: 0 })) });
@@ -687,8 +709,35 @@ function syncJobs(jobs) {
     card.node.classList.add('leave');
     setTimeout(() => card.node.remove(), 260);
   }
-  $('#empty').hidden = jobs.length > 0;
+  $('#empty').hidden = places.get($('#jobs')) > 0;
   paintPlayer();
+}
+
+// The details table under a kept file is read again whenever the file has
+// been written again (the job's `rev` goes up), and cleared when the file is
+// gone from the server.
+let shown = null; // { id, rev, seen } of the kept file whose details are on screen
+async function syncReport(jobs) {
+  const job = jobs.find((j) => j.kind === 'upload');
+  if (!job) {
+    if (shown && shown.seen) {
+      shown = null;
+      $('#inspect-out').replaceChildren();
+    }
+    return;
+  }
+  if (shown && shown.id === job.id) shown.seen = true;
+  if (!job.tracks[0] || !job.tracks[0].ready) return; // downloaded: what is on screen stays until the card leaves
+  if (shown && shown.id === job.id && shown.rev === job.rev) return;
+  if (uploading) return;
+  const want = { id: job.id, rev: job.rev, seen: true };
+  shown = want;
+  try {
+    const data = await api('/api/jobs/' + job.id + '/report');
+    if (shown === want) showInspect(null, data.report, true);
+  } catch {
+    /* the file has just gone: the next look at the list clears the table */
+  }
 }
 
 // How many people have the app open right now. The number comes back with
@@ -764,6 +813,7 @@ async function refresh() {
     const query = params.toString();
     const data = await api('/api/jobs' + (query ? '?' + query : ''));
     syncJobs(data.jobs);
+    syncReport(data.jobs);
     syncMeter(data.usage);
     syncOnline(data.online);
     autoDownload(data.jobs);
@@ -888,7 +938,8 @@ $('#form').addEventListener('submit', async (e) => {
 });
 
 // ---------- inspector ----------
-function showInspect(name, d) {
+/** Show a file's details. `kept`: the file has a card of its own above, so the heading is left out. */
+function showInspect(name, d, kept) {
   const head = el('div', 'insp-head');
   if (d.picture && d.picture.dataUrl) {
     const img = el('img');
@@ -936,7 +987,7 @@ function showInspect(name, d) {
     section(t('secRaw', { type }));
     for (const item of list) row(item.id, item.value);
   }
-  $('#inspect-out').replaceChildren(head, table);
+  $('#inspect-out').replaceChildren(...(kept ? [table] : [head, table]));
 }
 
 // The kinds of file this server's inspector accepts (set by its administrator).
@@ -944,9 +995,34 @@ function showInspect(name, d) {
 // decides for itself, from the file's bytes.
 const inspectKinds = () => boot.inspectTypes.map((k) => k.label).join(', ');
 
-async function inspectFile(file) {
+let uploading = false; // one file at a time
+
+/**
+ * Send one piece of the file. A piece that got lost on the way (no answer, a
+ * time-out, a server hiccup) is sent again, twice at most; a plain "no" from
+ * the server is final.
+ */
+async function sendPiece(id, at, blob, signal) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await api('/api/inspect/' + id + '?at=' + at, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: blob, signal });
+    } catch (err) {
+      const passing = !err.status || err.status === 408 || err.status >= 500;
+      if (signal.aborted || !passing || attempt >= 2) throw err;
+      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    }
+  }
+}
+
+// The file goes to the server in pieces: first its size is announced, then
+// the pieces follow one after another, and the answer to the last one is the
+// description. Its name is never sent. `more` is how many other files were
+// dropped along with it: only one is ever taken.
+async function inspectFile(file, more) {
   if (!file) return;
   const out = $('#inspect-out');
+  if (uploading) return toast(t('inspectBusy'), true);
+  if (more) toast(t('inspectFirst'));
   const ending = (/\.([A-Za-z0-9]{1,5})$/.exec(file.name) || [])[1];
   if (!ending || !boot.inspectTypes.some((k) => k.ext.includes(ending.toLowerCase()))) {
     return out.replaceChildren(el('div', 'alert', t('inspectKind', { types: inspectKinds() })));
@@ -954,13 +1030,74 @@ async function inspectFile(file) {
   if (file.size > boot.limits.maxUploadBytes) {
     return out.replaceChildren(el('div', 'alert', t('inspectBig', { mb: Math.round(boot.limits.maxUploadBytes / 1048576) })));
   }
-  out.replaceChildren(el('p', 'job-note', t('reading', { name: file.name })));
+
+  const keep = boot.features.inspectEdit && $('#opt-keep').checked;
+  const stop = new AbortController();
+  const text = el('p', 'job-note', t('sending', { name: file.name, n: 0 }));
+  const cancel = el('button', 'quiet', t('cancel'));
+  cancel.type = 'button';
+  const row = el('div', 'upload-row');
+  row.append(text, cancel);
+  const bar = el('div', 'bar');
+  const fill = el('i');
+  bar.append(fill);
+  const box = el('div', 'upload');
+  box.append(row, bar);
+
+  uploading = true;
+  let start;
   try {
-    showInspect(file.name, await api('/api/inspect', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }));
+    start = await postJson('/api/inspect', { size: file.size, keep });
   } catch (err) {
-    out.replaceChildren(el('div', 'alert', err.message));
+    uploading = false;
+    // With a file of theirs still here, its card and details stay where they are.
+    if ($('#inspect-job').childElementCount) toast(err.message, true);
+    else out.replaceChildren(el('div', 'alert', err.message));
+    return;
+  }
+  shown = null;
+  out.replaceChildren(box);
+  let id = start.id;
+  cancel.addEventListener('click', () => stop.abort());
+  try {
+    let answer = null;
+    for (let at = 0; at < file.size; at += start.piece) {
+      if (stop.signal.aborted) throw new DOMException('stopped', 'AbortError');
+      const end = Math.min(at + start.piece, file.size);
+      // The last piece is answered only once the server has read the whole file.
+      if (end === file.size) {
+        fill.style.width = '100%';
+        text.textContent = t('reading', { name: file.name });
+      }
+      answer = await sendPiece(id, at, file.slice(at, end), stop.signal);
+      const pct = Math.round((end / file.size) * 100);
+      fill.style.width = pct + '%';
+      if (end < file.size) text.textContent = t('sending', { name: file.name, n: pct });
+    }
+    id = null; // the server has taken it from here
+    if (answer.job) {
+      ownArt = { id: answer.job.id, dataUrl: answer.report.picture && answer.report.picture.dataUrl };
+      shown = { id: answer.job.id, rev: answer.job.rev, seen: false };
+    }
+    showInspect(file.name, answer.report, !!answer.job);
+  } catch (err) {
+    const stopped = stop.signal.aborted;
+    // Tell the server to throw away what has arrived; it would do so by itself a little later.
+    if (id) api('/api/inspect/' + id, { method: 'DELETE' }).catch(() => {});
+    out.replaceChildren(el('div', stopped ? 'job-note' : 'alert', stopped ? t('uploadStopped') : err.message));
+  } finally {
+    uploading = false;
+    refresh();
   }
 }
+
+// What the switch under the drop area means, in words, and whether it is there at all.
+function paintKeep() {
+  if (!boot) return;
+  $('#row-keep').hidden = !boot.features.inspectEdit;
+  $('#keep-hint').textContent = t($('#opt-keep').checked ? 'keepOn' : 'keepOff', { min: boot.limits.ttlMinutes });
+}
+$('#opt-keep').addEventListener('change', paintKeep);
 {
   const drop = $('#drop');
   const file = $('#file');
@@ -983,7 +1120,8 @@ async function inspectFile(file) {
   drop.addEventListener('drop', (e) => {
     e.preventDefault();
     drop.classList.remove('over');
-    inspectFile(e.dataTransfer.files[0]);
+    // Several files dropped together: the first one is taken, and the page says so.
+    inspectFile(e.dataTransfer.files[0], e.dataTransfer.files.length - 1);
   });
 }
 
@@ -1012,7 +1150,8 @@ function paintStatic() {
   if (!boot) return;
   $('#fineprint').textContent =
     [t('fineprint', { min: boot.limits.ttlMinutes, gb: fmtGb(boot.limits.quotaBytes) }), t('fineprintParts'), t('sitesNote', { sites: boot.sites.join(', ') })].join(' ');
-  $('#inspect-text').textContent = t('inspectText', { types: inspectKinds() });
+  $('#inspect-text').textContent = t('inspectText', { types: inspectKinds(), mb: Math.round(boot.limits.maxUploadBytes / 1048576) });
+  paintKeep();
   renderFormats();
   if (usage) syncMeter(usage);
 }

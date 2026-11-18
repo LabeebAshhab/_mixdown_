@@ -24,9 +24,16 @@ const isOpen = (job) => isWorking(job) || job.status === 'waiting';
 // throw its cookie away and come back as a new one, so everything held from
 // one IP address is capped as well.
 
+// A file on its way in to the inspector (src/inspect.js) has its whole size set
+// aside from its first byte, under the same two limits, so that uploads
+// cannot be used to fill the disk past them.
+/** @type {Map<string, {sid: string, ip: string, bytes: number}>} */
+const reserved = new Map();
+
 function held(match) {
   let sum = 0;
   for (const job of jobs.values()) if (match(job)) for (const t of job.tracks) if (t.file) sum += t.size || 0;
+  for (const r of reserved.values()) if (match(r)) sum += r.bytes;
   return sum;
 }
 
@@ -69,7 +76,82 @@ export function workingSessions() {
 function totalUsage() {
   let sum = 0;
   for (const job of jobs.values()) for (const t of job.tracks) sum += (t.file ? t.size || 0 : 0) + (t.previewFile ? t.previewSize || 0 : 0);
+  for (const r of reserved.values()) sum += r.bytes;
   return sum;
+}
+
+// ------------------------------------------------------------ a visitor's own file (the inspector)
+
+/**
+ * Set aside room for a file that is about to be uploaded. Throws, with a
+ * sentence for the visitor, when it does not fit.
+ * @param {string} id the upload's id
+ */
+export function reserveUpload(id, { sid, ip, bytes }) {
+  if (closing) throw new PublicError('The server is restarting. Try again in a moment.', 503);
+  if (bytes > Math.min(config.quotaBytes, config.ipQuotaBytes)) {
+    throw new PublicError(`That file is larger than your ${gb(config.quotaBytes)} of space.`, 413);
+  }
+  if (bytes > config.quotaBytes - usageFor(sid)) {
+    throw new PublicError('There is not enough of your space left for that file. Download or remove what is waiting, then try again.', 409);
+  }
+  if (bytes > config.ipQuotaBytes - usageAt(ip)) throw addressFull(409);
+  if (totalUsage() + bytes > config.totalBytes) throw new PublicError('The server is full right now. Try again in a few minutes.', 503);
+  reserved.set(id, { sid, ip, bytes });
+}
+
+/** Give the room back: the upload was dropped, or its file was read and deleted. */
+export function releaseUpload(id) {
+  if (reserved.delete(id)) wake();
+}
+
+/** Does this browser already hold a file of its own that it has not downloaded or removed? */
+export const holdsUpload = (sid) => [...jobs.values()].some((job) => job.kind === 'upload' && job.sid === sid && job.tracks.some((t) => t.file));
+
+/**
+ * An uploaded file that is kept for editing becomes a finished job of one
+ * track, so that everything a download has applies to it too: only its own
+ * browser can reach it, it counts against that browser's and that address's
+ * space, it is deleted when downloaded, removed or left for too long.
+ * The room set aside for the upload passes to the job in the same step.
+ * @param {{id: string, sid: string, ip: string, dir: string, format: string, track: object}} o
+ */
+export function adoptUpload({ id, sid, ip, dir, format, track }) {
+  const now = Date.now();
+  const job = {
+    id,
+    sid,
+    ip,
+    kind: 'upload',
+    site: null,
+    sources: [],
+    format,
+    options: {},
+    asAlbum: false,
+    wantLyrics: false,
+    syncedLyrics: false,
+    normalize: false,
+    status: 'done',
+    title: track.title,
+    tracks: [track],
+    createdAt: now,
+    finishedAt: now,
+    dir,
+    abort: new AbortController(),
+    cancelled: false,
+    listed: true,
+    next: 1,
+    made: track.size,
+    part: 0,
+    zips: 0,
+    waitFrom: null,
+    fresh: true,
+    rev: 1, // goes up each time the file is written again, so the page knows to read its details again
+    fits: () => true,
+  };
+  reserved.delete(id);
+  jobs.set(id, job);
+  return job;
 }
 
 // ------------------------------------------------------------ queue
@@ -324,6 +406,8 @@ async function giveUp(job) {
 export function publicJob(job) {
   return {
     id: job.id,
+    kind: job.kind, // "upload": a file of the visitor's own, kept by the inspector for editing
+    rev: job.rev || 0,
     format: job.format,
     asAlbum: job.asAlbum,
     status: job.status,
@@ -348,6 +432,7 @@ export function publicJob(job) {
       lrc: !!t.lrcFile,
       gain: t.gain ?? null,
       editable: !!(t.file && t.fmt),
+      coverLost: !!t.coverLost, // its own picture cannot be kept when it is written again
       site: t.site,
       source: t.source,
       match: t.match,

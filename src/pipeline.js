@@ -222,8 +222,10 @@ async function downloadCover(url) {
  * thumbnail, or an image the visitor uploaded), check that it really is an
  * image, and re-encode it into two clean JPEGs in the job's folder: a large
  * square one to embed and a small one for the interface. Re-encoding means
- * nothing from the original file except its pixels is kept.
- * @param {{url?: string, file?: string, data?: Buffer, label: string}[]} candidates
+ * nothing from the original file except its pixels is kept. A candidate
+ * marked `whole` (the picture a visitor's own file came with) keeps its
+ * shape instead of being cut square.
+ * @param {{url?: string, file?: string, data?: Buffer, label: string, whole?: boolean}[]} candidates
  */
 async function prepareCover(job, work, candidates) {
   for (const c of candidates) {
@@ -241,7 +243,9 @@ async function prepareCover(job, work, candidates) {
           [
             '-nostdin', '-y', '-v', 'error', '-f', demuxer, '-i', raw,
             '-filter_complex',
-            "[0:v]crop='min(iw,ih)':'min(iw,ih)',split[a][b];[a]scale='min(1400,iw)':'min(1400,ih)'[big];[b]scale=256:256[small]",
+            c.whole
+              ? "[0:v]split[a][b];[a]scale='min(1400,iw)':'min(1400,ih)':force_original_aspect_ratio=decrease[big];[b]crop='min(iw,ih)':'min(iw,ih)',scale=256:256[small]"
+              : "[0:v]crop='min(iw,ih)':'min(iw,ih)',split[a][b];[a]scale='min(1400,iw)':'min(1400,ih)'[big];[b]scale=256:256[small]",
             '-map', '[big]', '-frames:v', '1', '-q:v', '2', '-pix_fmt', 'yuvj420p', insideDir(job.dir, bigName),
             '-map', '[small]', '-frames:v', '1', '-q:v', '4', '-pix_fmt', 'yuvj420p', insideDir(job.dir, smallName),
           ],
@@ -321,12 +325,15 @@ async function makePreview(job, source, gain, signal) {
  * `audioArgs` the first time, copied unchanged (see copyArgs) when a finished
  * file is tagged again.
  * @param {{job: object, work: string, input: string, outPath: string, fmt: object, audioArgs: string[],
- *   dsd?: {rate: string, gain: number}, tags: object, lyrics: string|null, synced: string|null, coverBig: string|null}} o
+ *   dsd?: {rate: string, gain: number}, tags: object, lyrics: string|null, synced: string|null, coverBig: string|null,
+ *   inputArgs?: string[], kept?: object, timeout?: number}} o
+ *   `inputArgs`: how ffmpeg must open `input` when it is a visitor's own file (see src/inspect.js);
+ *   `kept`: tags carried over from that file (see KEPT in src/tags.js)
  */
-async function writeTagged({ job, work, input, outPath, fmt, audioArgs, dsd, tags, lyrics, synced, coverBig }) {
+async function writeTagged({ job, work, input, outPath, fmt, audioArgs, dsd, tags, lyrics, synced, coverBig, inputArgs = [], kept, timeout = config.timeouts.convert }) {
   const signal = job.abort.signal;
   const coverData = coverBig && (fmt.cover === 'id3' || fmt.cover === 'vorbis') ? await fs.readFile(coverBig) : null;
-  const id3 = () => buildId3(tags, { lyrics, synced, cover: coverData });
+  const id3 = () => buildId3(tags, { lyrics, synced, cover: coverData, kept });
 
   if (fmt.special === 'dsd') {
     if (dsd) {
@@ -344,6 +351,8 @@ async function writeTagged({ job, work, input, outPath, fmt, audioArgs, dsd, tag
     meta = ffmetadata(tags, fmt.numbering, {
       lyrics,
       pictureBlock: fmt.cover === 'vorbis' && coverData ? vorbisPictureBlock(coverData) : null,
+      kept,
+      mp4: fmt.ext === 'm4a',
     });
   } else if (fmt.ext === 'wav') {
     meta = ffmetadata(tags, 'slash'); // basic RIFF INFO for players that ignore ID3 in WAV
@@ -352,7 +361,7 @@ async function writeTagged({ job, work, input, outPath, fmt, audioArgs, dsd, tag
 
   const attach = fmt.cover === 'attach' && coverBig;
   const ffOut = fmt.ext === 'mp3' ? path.join(work, `audio-${randomUUID()}.mp3`) : outPath;
-  const args = ['-nostdin', '-y', '-hide_banner', '-v', 'error', '-i', input];
+  const args = ['-nostdin', '-y', '-hide_banner', '-v', 'error', ...inputArgs, '-i', input];
   if (attach) args.push('-i', coverBig);
   args.push('-f', 'ffmetadata', '-i', metaFile, '-map', '0:a:0');
   if (attach) {
@@ -362,7 +371,7 @@ async function writeTagged({ job, work, input, outPath, fmt, audioArgs, dsd, tag
     );
   }
   args.push('-map_metadata', attach ? '2' : '1', '-map_metadata:s:a', '-1', '-map_chapters', '-1', ...audioArgs, ffOut);
-  await run(config.ffmpeg, args, { timeout: config.timeouts.convert, signal });
+  await run(config.ffmpeg, args, { timeout, signal });
 
   if (fmt.ext === 'mp3') await writeMp3WithId3(ffOut, outPath, id3());
   else if (fmt.ext === 'wav') await appendWavId3(outPath, id3());
@@ -387,7 +396,7 @@ async function saveLrc(job, track, synced) {
 }
 
 /** The name suggested to the browser; the name on disk stays a UUID. */
-function downloadName(job, index, tags, ext) {
+export function downloadName(job, index, tags, ext) {
   const prefix = job.tracks.length > 1 ? `${String(index + 1).padStart(2, '0')} - ` : '';
   return `${prefix}${tags.artist ? `${tags.artist} - ` : ''}${tags.title}.${ext}`;
 }
@@ -619,7 +628,7 @@ export async function processTrack(job, track, index) {
       tags.discTotal = null;
     }
     const candidates = [];
-    if (match.coverUrl) candidates.push({ url: match.coverUrl, label: `${match.source} album art` });
+    candidates.push(...(match.covers || []));
     if (thumbnail) candidates.push({ file: thumbnail, label: site.artwork });
     const [lyrics, cover] = await Promise.all([
       job.wantLyrics
@@ -719,7 +728,7 @@ export async function processTrack(job, track, index) {
 export async function lookupSong({ title, artist, duration }) {
   const match = await resolveMetadata({ track: title, artist, artists: [artist], title: `${artist} - ${title}`, duration });
   if (match.confidence === null) return match.lookupFailed ? { failed: true } : null;
-  return { source: match.source, tags: match.tags, coverUrl: match.coverUrl };
+  return { source: match.source, tags: match.tags, covers: match.covers };
 }
 
 /** New artwork for a finished track from an image the visitor uploaded. */
@@ -730,15 +739,26 @@ export async function uploadCover(job, track, data) {
     const cover = await prepareCover(job, work, [{ data, label: 'Your image' }]);
     if (!cover.small) throw new PublicError('That image could not be read. Use a JPEG, PNG or WebP picture.', 415);
     await swapCover(job, track, cover);
+    await dropOwnCover(job, track);
   } finally {
     await fs.rm(work, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
   }
 }
 
+/** Forget the picture a visitor's own file came with: it has been replaced, or turned into the track's artwork. */
+async function dropOwnCover(job, track) {
+  const raw = track.rawCover;
+  track.rawCover = null;
+  track.coverLost = false;
+  if (raw) await fs.rm(insideDir(job.dir, raw), { force: true }).catch(() => {});
+}
+
 /**
  * Write a finished file again with corrected tags (and the track's current
  * artwork). The audio is copied bit for bit, never converted a second time.
- * @param {{tags: object, cover?: {url: string, label: string}}} edit `cover.url` only ever comes from a catalogue lookup
+ * This is also how a visitor's own file is edited (src/inspect.js): the audio
+ * is copied the same way and every tag is written anew from text.
+ * @param {{tags: object, covers?: {url: string, label: string}[]}} edit the addresses in `covers` only ever come from a catalogue lookup
  */
 export async function retagTrack(job, track, index, edit) {
   const work = insideDir(job.dir, `work-${randomUUID()}`);
@@ -748,9 +768,21 @@ export async function retagTrack(job, track, index, edit) {
   const outPath = insideDir(job.dir, diskName);
   try {
     const tags = { ...track.tags, ...edit.tags };
-    if (edit.cover) {
-      const cover = await prepareCover(job, work, [edit.cover]);
+    if (edit.covers?.length) {
+      const cover = await prepareCover(job, work, edit.covers);
+      if (cover.small) {
+        await swapCover(job, track, cover);
+        await dropOwnCover(job, track);
+      }
+    }
+    // A visitor's own file: the picture it came with is re-encoded the first
+    // time the file is written again, so that it stays in the file.
+    if (track.rawCover && !track.coverBig) {
+      const cover = await prepareCover(job, work, [{ file: insideDir(job.dir, track.rawCover), label: 'Your file', whole: true }]);
       if (cover.small) await swapCover(job, track, cover);
+      const kept = !!cover.small;
+      await dropOwnCover(job, track);
+      track.coverLost = !kept;
     }
     // A corrected name is a second chance to find lyrics that were missed.
     let lyrics = track.lyrics;
@@ -770,14 +802,22 @@ export async function retagTrack(job, track, index, edit) {
       lyrics: embed,
       synced,
       coverBig: track.coverBig ? insideDir(job.dir, track.coverBig) : null,
+      inputArgs: job.inputArgs,
+      kept: track.kept,
+      // Copying a visitor's own file takes seconds; one that keeps ffmpeg busy for longer is stopped.
+      timeout: job.kind === 'upload' ? 180_000 : undefined,
     });
-    const meta = await readMeta(outPath);
+    // A visitor's own file is read back by the confined reader, like the first time.
+    const meta = job.readBack ? await job.readBack(outPath) : await readMeta(outPath);
     const size = (await fs.stat(outPath)).size;
     if (!track.file || job.cancelled) throw new PublicError('That file is gone.', 404);
+    // Copied audio plus new tags and a picture: a result much larger than what came in is not that.
+    if (job.kind === 'upload' && size > track.size + 64 * 1024 * 1024) throw new Error('rewritten file grew too much');
     await saveLrc(job, track, synced);
     Object.assign(track, { meta, size, tags, lyrics, file: diskName, title: meta.title || tags.title, name: downloadName(job, index, tags, fmt.ext) });
     if (job.tracks.length === 1) job.title = track.title;
     track.match = { ...track.match, edited: true };
+    job.afterEdit?.(track);
     await fs.rm(old, { force: true }).catch(() => {});
   } catch (e) {
     await fs.rm(outPath, { force: true }).catch(() => {});

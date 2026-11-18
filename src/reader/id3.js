@@ -15,7 +15,7 @@ const FRAMES = {
   TCM: 'composer', COM: 'comment', ULT: 'lyrics', TPB: 'label', TBP: 'bpm', TCR: 'copyright', TEN: 'encodedby',
   TSS: 'encodersettings', TT1: 'grouping', TT3: 'subtitle', TCP: 'compilation',
 };
-const USER_TEXT = { ARTISTS: 'artists', ISRC: 'isrc', LABEL: 'label', ORIGINALYEAR: 'originalyear' };
+const USER_TEXT = { ARTISTS: 'artists', ISRC: 'isrc', LABEL: 'label', ORIGINALYEAR: 'originalyear', COMMENT: 'comment' }; // ffmpeg writes comments as TXXX:comment
 
 const syncsafe = (b, o) => ((b[o] & 0x7f) << 21) | ((b[o + 1] & 0x7f) << 14) | ((b[o + 2] & 0x7f) << 7) | (b[o + 3] & 0x7f);
 

@@ -4,7 +4,7 @@
 //   - only the handful of public shell files below are ever stored
 //   - /api/ is never intercepted and never cached: songs, artwork, tags and
 //     session data always go straight to the server
-const CACHE = 'mixdown-shell-v4';
+const CACHE = 'mixdown-shell-v5';
 const SHELL = ['/', '/style.css', '/theme.js', '/lang.js', '/backdrop.js', '/app.js', '/favicon.svg', '/manifest.webmanifest', '/icons/icon-192.png', '/privacy'];
 
 self.addEventListener('install', (event) => {

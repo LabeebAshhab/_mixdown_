@@ -50,7 +50,7 @@
 
   <main class="panel doc-body">
     <h1>Privacy &amp; Policy</h1>
-    <p class="doc-date">Last updated 17 November 2026</p>
+    <p class="doc-date">Last updated 18 November 2026</p>
     <p class="doc-lead">This page has two parts. <strong>Privacy</strong> says what Mixdown handles when you use it, where that goes, and when it is deleted. <strong>Usage policy</strong> says what Mixdown may be used for, what limits this server sets, and what you can and cannot expect from it.</p>
     <nav class="doc-nav" aria-label="Parts of this page">
       <a href="#privacy"><svg class="icon"><use href="#i-shield"/></svg>Privacy</a>
@@ -69,6 +69,7 @@
         <li>One cookie: a random number that keeps your files yours. It is not used to follow you anywhere.</li>
         <li>Your files are deleted from the server the moment you download them, or after %TTL_MINUTES% minutes if you don't.</li>
         <li>A playlist larger than your space is fetched a part at a time. The songs still to come are only a list of titles and links in memory; none of them is stored until there is room.</li>
+        <li>A file of your own that you inspect is deleted as soon as it has been read. If you ask to correct its tags it stays for %TTL_MINUTES% minutes at most, only your browser can reach it, and it is deleted when you download or remove it. Its name never leaves your device.</li>
         <li>The header shows how many people are online. It is a number only: nobody can see who the others are.</li>
         <li>There is no database. Nothing about you is sold, shared or kept.</li>
       </ul>
@@ -104,15 +105,27 @@
       <li>Whenever the server restarts, everything left on it is deleted.</li>
     </ul>
 
-    <h4>Files you upload</h4>
-    <p><strong>Inspect a file.</strong> Only the kinds of audio file this server accepts are taken, and that is judged from the file's own bytes, never from its name. The file is saved under a random name and read once, for its tags and audio details, by a separate locked-down process that can open nothing else on the server. It is deleted straight away, whether or not it could be read. Its name never leaves your browser, and what comes back is shown to you as plain text.</p>
+    <h4 id="your-files">Files you upload</h4>
+    <p><strong>Inspect a file.</strong> A file you choose on the "Inspect a file" tab is sent to this server so that its tags and audio details can be read. This is the only place where something of your own leaves your device, so here is all of what happens to it. %INSPECT_EDIT_NOTE%</p>
+    <ul>
+      <li><strong>What is sent.</strong> The file's contents, in pieces of %UPLOAD_PIECE_MB% MB, and before them its size. Its name, its folder and its dates are not sent: the page shows you the name from its own memory.</li>
+      <li><strong>What is accepted.</strong> Only the kinds of audio file this server reads, up to %MAX_UPLOAD_MB% MB. The kind is judged from the file's own bytes, never from its name, and a file that does not start like one of them is refused after its first piece and deleted.</li>
+      <li><strong>How it is read.</strong> The file is saved under a random name and read by a separate, locked-down process that can open nothing else on the server. Everything that process reports is checked before it is used, and it is shown to you as plain text.</li>
+      <li><strong>If you only look.</strong> With "Let me correct its tags afterwards" switched off, the file is deleted the moment it has been read, whether or not it could be read. Nothing of it is kept.</li>
+      <li><strong>If you want to correct its tags.</strong> With that switch on, the file stays on the server so that it can be written again with your changes. It sits in a folder with a random name. Only your browser, by its cookie, can see it, change it, download it or remove it; nobody else is shown that it exists. It counts against your space like a finished download.</li>
+      <li><strong>It is never played or analysed.</strong> No preview is made of a file of your own, its sound is not decoded, and nothing is worked out from it beyond the tags and audio details shown to you.</li>
+      <li><strong>When it is deleted.</strong> As soon as it has been sent back to you in full; when you press its remove button; %TTL_MINUTES% minutes after you uploaded it or last saved a change, if you do neither; and whenever the server restarts. A file you stop sending part-way is deleted at once when you cancel, and otherwise a few minutes after the last piece arrived.</li>
+      <li><strong>One at a time.</strong> A browser can have one file of its own on the server. Download or remove it and you can inspect the next.</li>
+    </ul>
+    <p><strong>What "written again" means.</strong> Your sound is never changed: the audio is copied as it is, bit for bit. The tags are written anew from text, namely the fields you see in the editor, the lyrics, and the common tags the editor does not show (composer, comment, copyright, label, ISRC and a few more). The picture inside the file is re-encoded, and only its pixels are kept. Nothing from the file's tag area is copied over as raw bytes, so whatever else was hidden there does not come back to you, and unusual tags are lost. The tool that copies the audio is told exactly what kind of file it is handling and may open nothing but that file.</p>
+    <p><strong>What the server remembers of it.</strong> While the file is kept, the server holds in memory what it read from it: the tags and audio details shown on the page. That goes when the file goes. It is not written to the log, and it is not sent anywhere unless you press "Find it again", which is described under "Tags you correct".</p>
     <p><strong>Your own cover image.</strong> The picture is checked and re-encoded, and only the re-encoded copy is kept, together with the song it belongs to, until that song is deleted.</p>
 
     <h4>Tags you correct</h4>
-    <p>A title and artist you type in the tag editor are used to look the song up again and are written into your file. They are kept with the download and go with it.</p>
+    <p>A title and artist you type in the tag editor are written into your file. They are kept with the file and go with it. They are sent to the catalogues listed below only when you press "Find it again", and then only those two, as search words: nothing else about your file is sent, and never the file itself.</p>
 
     <h4>The server log</h4>
-    <p>Mixdown writes short technical lines: the random id of a download, which catalogue matched, the file type and size, and, when something fails, the error text of the tool that failed, which can name the video or track involved. It does not write IP addresses, cookies, search words or the names of uploaded files.</p>
+    <p>Mixdown writes short technical lines: the random id of a download, which catalogue matched, the file type and size, and, when something fails, the error text of the tool that failed, which can name the video or track involved. For a file of your own that is kept for editing, the line holds its random id, its kind and its size, and nothing of its tags. When a catalogue cannot be reached, the line names the catalogue and the kind of failure, not the song. Mixdown does not write IP addresses, cookies, search words, the names of uploaded files, or the keys the server uses for the catalogues.</p>
 
     <h3>Other services the server talks to</h3>
     <p>To fetch a song and work out what it is, the server contacts a few other services. These requests come from the server, never from your browser, so the services see the server's address and not yours, and receive no cookie or id of yours.</p>
@@ -128,12 +141,12 @@
             <td data-label="What it receives">The link, the words you searched for, or the song's title and artist</td>
           </tr>
           <tr>
-            <td data-label="Service">Apple iTunes Search, Deezer, MusicBrainz</td>
+            <td data-label="Service">The music catalogues. On this server: %CATALOGUES%</td>
             <td data-label="When">Identifying a song, and when you look one up in the tag editor</td>
-            <td data-label="What it receives">The song's title and artist, as search words</td>
+            <td data-label="What it receives">The song's title and artist, as search words; for a song it has identified, a request for the details of that song or album</td>
           </tr>
           <tr>
-            <td data-label="Service">Apple, Deezer and Cover Art Archive (Internet Archive) image servers</td>
+            <td data-label="Service">The image servers of those catalogues (for MusicBrainz, the Cover Art Archive at the Internet Archive)</td>
             <td data-label="When">Fetching album artwork</td>
             <td data-label="What it receives">A request for that album's cover image</td>
           </tr>
@@ -145,7 +158,9 @@
         </tbody>
       </table>
     </div>
-    <p>Each of these services handles the server's requests under its own privacy policy. The catalogue and lyrics lookups can be switched off by whoever runs the server.</p>
+    <p><strong>How the catalogues are asked.</strong> Mixdown does not depend on a single catalogue. They are asked one after another, in the order given above, and the search stops at the first one that has a good match, so most songs are seen by one or two of them. When the catalogue that matched leaves a detail empty (the genre, the year, the track number or the artwork), at most two of the others are asked for that same song. A catalogue that refuses the server is left alone for a few minutes.</p>
+    <p><strong>Catalogues that need a key.</strong> Apple iTunes Search, Deezer and MusicBrainz answer anyone. Tidal, Spotify, Discogs and Last.fm answer only a server that has registered with them, and are asked only when whoever runs this server has given it such a key; the list above shows which ones this server uses. A key identifies the server, never you. It is sent only to the service it belongs to, over an encrypted connection, is never passed on if that service redirects the request, is never written to the log, and is never sent to your browser.</p>
+    <p>The server may contact only the addresses of the services it is set up to use, and nothing else: a fixed list, checked before every request. Each of these services handles the server's requests under its own privacy policy. The catalogue and lyrics lookups can be switched off by whoever runs the server.</p>
     <p>The GitHub and website links in the footer lead away from this site. They open without telling the other site which page you came from.</p>
 
     <h3>What stays in your browser</h3>
@@ -169,7 +184,10 @@
         <tbody>
           <tr><td data-label="What">Finished files</td><td data-label="Where">Server disk</td><td data-label="Until">You download them; %TTL_MINUTES% minutes at most</td></tr>
           <tr><td data-label="What">Player copy, artwork, lyrics file</td><td data-label="Where">Server disk</td><td data-label="Until">The download is removed; %TTL_MINUTES% minutes after it finished at most</td></tr>
-          <tr><td data-label="What">A file you inspect</td><td data-label="Where">Server disk</td><td data-label="Until">It has been read: a few seconds</td></tr>
+          <tr><td data-label="What">A file you inspect without editing</td><td data-label="Where">Server disk</td><td data-label="Until">It has been read: a few seconds after the last piece arrives</td></tr>
+          <tr><td data-label="What">A file you inspect and keep to correct its tags</td><td data-label="Where">Server disk</td><td data-label="Until">You download or remove it; %TTL_MINUTES% minutes after the upload or your last saved change at most</td></tr>
+          <tr><td data-label="What">The pieces of a file that is still being sent</td><td data-label="Where">Server disk</td><td data-label="Until">You cancel; about %UPLOAD_IDLE_MINUTES% minutes with no new piece; %UPLOAD_TOTAL_MINUTES% minutes in all at most</td></tr>
+          <tr><td data-label="What">What was read from a kept file (its tags and audio details)</td><td data-label="Where">Server memory</td><td data-label="Until">The file is deleted</td></tr>
           <tr><td data-label="What">Links and corrected tags</td><td data-label="Where">Server memory</td><td data-label="Until">The download is removed</td></tr>
           <tr><td data-label="What">The songs of a playlist still to come (titles and links)</td><td data-label="Where">Server memory</td><td data-label="Until">The playlist is finished and removed; if it is cancelled, %TTL_MINUTES% minutes after that</td></tr>
           <tr><td data-label="What">Search words and their results</td><td data-label="Where">Server memory</td><td data-label="Until">Newer searches replace them (200 are kept at most), or the server restarts</td></tr>
@@ -185,6 +203,7 @@
     <h3>Your choices</h3>
     <ul>
       <li>Remove a download with its remove button, and its files are deleted from the server immediately. For a playlist this also drops the songs that were still to come.</li>
+      <li>Switch off "Let me correct its tags afterwards" before you inspect a file, and the file is deleted as soon as it has been read. A file you did keep has the same remove button as a download.</li>
       <li>Clear this site's data in your browser to remove the cookie, your preferences, the saved covers and the stored copy of the app.</li>
       <li>You can block the cookie, but Mixdown cannot work without it: it is how the server knows which files are yours.</li>
     </ul>
@@ -207,6 +226,7 @@
 
     <h3>What Mixdown does</h3>
     <p>You give it a YouTube or SoundCloud link, or pick a song from a search. It fetches that audio, converts it to the format you chose, and adds tags, artwork and lyrics. Mixdown has no music of its own and no library: everything it handles comes from a public page that you pointed it to, is shown only to you, and is deleted within minutes.</p>
+    <p>It can also read an audio file of your own and show what is inside it, and, where this server allows it, write that file's tags again with your corrections. The <a href="#own-files">part about your own files</a> says what to expect.</p>
 
     <h3>What you may download</h3>
     <ul>
@@ -236,7 +256,9 @@
           <tr><td data-label="Limit">Links in progress at the same time</td><td data-label="On this server">%MAX_JOBS% for each visitor; a playlist that is waiting for space counts as one</td></tr>
           <tr><td data-label="Limit">New links</td><td data-label="On this server">%RATE_CONVERT% a minute</td></tr>
           <tr><td data-label="Limit">Searches by song name</td><td data-label="On this server">%RATE_SEARCH% a minute</td></tr>
-          <tr><td data-label="Limit">Files you upload</td><td data-label="On this server">%MAX_UPLOAD_MB% MB for a file to inspect, %MAX_COVER_MB% MB for a cover image</td></tr>
+          <tr><td data-label="Limit">A file you inspect</td><td data-label="On this server">%MAX_UPLOAD_MB% MB, one at a time for each browser; while it is kept for editing it uses your space like a finished download</td></tr>
+          <tr><td data-label="Limit">Files offered to the inspector</td><td data-label="On this server">%RATE_INSPECT% a minute</td></tr>
+          <tr><td data-label="Limit">A cover image you upload</td><td data-label="On this server">%MAX_COVER_MB% MB</td></tr>
         </tbody>
       </table>
     </div>
@@ -275,6 +297,19 @@
     </ul>
     <p><strong>What to do.</strong> Try again a little later. The shared space is free again as soon as the other people download their songs. Songs that nobody downloads are deleted after %TTL_MINUTES% minutes; if someone at your address is working through a long playlist part by part, it can take longer. When there is room, paste the link again and it starts from the first song.</p>
     <p><strong>What the others can see.</strong> Nothing. The server only adds up how much space is in use at the address. Nobody at your address can see what you download, and you cannot see what they do.</p>
+
+    <h3 id="own-files">Inspecting and correcting your own files</h3>
+    <p>The "Inspect a file" tab reads an audio file from your device and shows its tags, artwork and audio details. %INSPECT_EDIT_NOTE%</p>
+    <ul>
+      <li><strong>One file at a time.</strong> Choose one file. If you drop several, the first is taken and the page says so. While a file of yours is kept on the server, the next one is refused until you download or remove the first.</li>
+      <li><strong>Size and kind.</strong> Up to %MAX_UPLOAD_MB% MB, and only the kinds of audio file listed on the tab. A large file is sent in pieces, with a bar that shows how far it is; you can cancel at any moment and nothing of it is kept.</li>
+      <li><strong>It uses your space.</strong> A kept file counts against your %QUOTA_GB% GB and against the %IP_QUOTA_GB% GB shared by your network address, exactly like a finished download, from the moment you start sending it. If it does not fit, download or remove what is waiting first.</li>
+      <li><strong>The sound is not touched.</strong> Saving a change copies the audio as it is and writes the tags again. The file you download plays exactly as the one you uploaded.</li>
+      <li><strong>What is kept and what is not.</strong> The fields in the editor, the lyrics, the artwork (re-encoded, so a very large or unusual picture may be lost; the editor warns you first) and the common extra tags are kept. Unusual tags, chapter marks, and any second audio or video track in the file are not: only the first audio track is written. If that matters for a file, keep your original.</li>
+      <li><strong>Not every file can be written again.</strong> A file that is damaged, or holds a kind of audio its container does not normally carry, can be inspected but may refuse to be saved. The file on the server is then left as it was.</li>
+      <li><strong>Download it.</strong> A kept file waits %TTL_MINUTES% minutes, counted again from each change you save, and is deleted from the server the moment you have downloaded it. Mixdown is not a place to store files.</li>
+      <li><strong>Only your own files.</strong> Upload files you own or may edit. The catalogue lookup in the editor is there to correct the tags of music you already have.</li>
+    </ul>
 
     <h3>What you get, and what you don't</h3>
     <ul>

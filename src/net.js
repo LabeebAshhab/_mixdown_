@@ -1,7 +1,10 @@
 // Outbound HTTP with SSRF protection. Every request the server makes on its
 // own (catalogue lookups, artwork, lyrics) goes through safeFetch():
-//   - https only, no credentials, default port only
-//   - the host must be on a fixed allowlist
+//   - https only, no credentials in the address, default port only
+//   - the host must be on a fixed allowlist, and only the hosts of the
+//     catalogues this server really uses are on it
+//   - a request that carries one of the server's keys is never redirected, so
+//     a key cannot be sent on to another address
 //   - DNS is resolved by our own lookup at connect time and the connection is
 //     refused if any address is loopback, private, link-local or multicast,
 //     which also defeats DNS rebinding
@@ -12,15 +15,19 @@ import net from 'node:net';
 import { Agent, fetch } from 'undici';
 import { config } from './config.js';
 
+// Hosts each catalogue needs: its search, its sign-in for a key, its artwork.
+const CATALOGUE_HOSTS = {
+  itunes: ['itunes.apple.com', 'mzstatic.com'],
+  deezer: ['api.deezer.com', 'dzcdn.net'],
+  musicbrainz: ['musicbrainz.org', 'coverartarchive.org', 'archive.org'], // archive.org stores the Cover Art Archive
+  tidal: ['openapi.tidal.com', 'auth.tidal.com', 'resources.tidal.com'],
+  spotify: ['api.spotify.com', 'accounts.spotify.com', 'i.scdn.co'],
+  discogs: ['api.discogs.com', 'i.discogs.com'],
+  lastfm: ['ws.audioscrobbler.com'],
+};
 const ALLOWED_HOSTS = [
-  'itunes.apple.com',
-  'mzstatic.com', // iTunes artwork
-  'api.deezer.com',
-  'dzcdn.net', // Deezer artwork
-  'musicbrainz.org',
-  'coverartarchive.org',
-  'archive.org', // Cover Art Archive storage
-  'lrclib.net',
+  ...(config.lookup ? config.catalogues.flatMap((id) => CATALOGUE_HOSTS[id] || []) : []),
+  ...(config.lyrics ? ['lrclib.net'] : []),
 ];
 
 export function hostAllowed(hostname) {
@@ -91,10 +98,13 @@ function assertSafeUrl(u) {
 
 /**
  * @param {string} url
- * @param {{timeout?: number, maxBytes?: number, accept?: string}} [opts]
+ * @param {{timeout?: number, maxBytes?: number, accept?: string, method?: 'GET'|'POST', headers?: Record<string, string>, body?: string}} [opts]
+ *   `headers` is for a catalogue's key: a request that has them is not redirected
  * @returns {Promise<{ok: boolean, status: number, type: string, body: Buffer}>}
  */
-export async function safeFetch(url, { timeout = 10_000, maxBytes = 5 * 1024 * 1024, accept = '*/*' } = {}) {
+export async function safeFetch(url, { timeout = 10_000, maxBytes = 5 * 1024 * 1024, accept = '*/*', method = 'GET', headers, body } = {}) {
+  if (method !== 'GET' && method !== 'POST') throw new Error('method not allowed');
+  const keyed = !!headers || method === 'POST';
   let current = new URL(url);
   for (let hop = 0; hop <= 3; hop++) {
     assertSafeUrl(current);
@@ -103,11 +113,17 @@ export async function safeFetch(url, { timeout = 10_000, maxBytes = 5 * 1024 * 1
     try {
       const res = await fetch(current, {
         dispatcher: agent,
+        method,
+        body: method === 'POST' ? body : undefined,
         redirect: 'manual',
         signal: controller.signal,
-        headers: { Accept: accept, 'User-Agent': config.userAgent },
+        headers: { ...headers, Accept: accept, 'User-Agent': config.userAgent },
       });
       if ([301, 302, 303, 307, 308].includes(res.status)) {
+        if (keyed) {
+          await res.body?.cancel().catch(() => {});
+          throw new Error('redirect refused');
+        }
         const location = res.headers.get('location');
         await res.body?.cancel().catch(() => {});
         if (!location) throw new Error('redirect without location');

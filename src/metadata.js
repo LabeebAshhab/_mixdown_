@@ -3,9 +3,11 @@
 // YouTube only gives us a video title, a channel name and a thumbnail. This
 // module turns that into real release metadata:
 //   1. build hypotheses of (artist, title) from the YouTube data
-//   2. search iTunes, then Deezer, then MusicBrainz for candidates
+//   2. search the catalogues one after another, iTunes first, until one of
+//      them has a good match (which ones, and in what order: src/config.js)
 //   3. score every candidate on title, artist and duration, reject weak ones
-//   4. return the catalogue's tags and album artwork, or a careful fallback
+//   4. ask the next catalogues for whatever the winner left empty
+//   5. return the tags and album artwork, or a careful fallback
 // All requests go through safeFetch (see net.js).
 import { config } from './config.js';
 import { safeJson } from './net.js';
@@ -147,11 +149,38 @@ function fallbackTags(info, hyps) {
   return { title: pick.title, artist: pick.artist, album: info.album || '', albumArtist: info.album_artist || '', date, genre: info.genre || '' };
 }
 
-// ------------------------------------------------------------ providers
+// ------------------------------------------------------------ catalogues
+//
+// Every catalogue answers a search with the same plain shape (a "candidate"),
+// so the scoring further down does not care where one came from:
+//   { source, title, artist, album, albumArtist, date, track, trackTotal,
+//     disc, discTotal, genre, duration (seconds), isSingle, live, cover (address) }
+// iTunes, Deezer and MusicBrainz are open. Tidal, Spotify, Discogs and Last.fm
+// answer only with a key of this server's own (see .env.example) and are left
+// out until it is set. A key goes into a request header, or for Last.fm into
+// the address; it is never logged and never sent to a visitor's browser.
+
+const enc = encodeURIComponent;
+const market = () => config.itunesCountry;
+
+/** Title and artist kept apart, for the catalogues that search them separately. */
+function pairQueries(hyps) {
+  const seen = new Set();
+  const out = [];
+  for (const h of hyps) {
+    const title = cleanText(cleanTitle(h.title), 150);
+    const artist = cleanText(h.artist, 150);
+    const key = `${norm(artist)}|${norm(title)}`;
+    if (!norm(title) || !norm(artist) || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ title, artist });
+  }
+  return out.slice(0, 2);
+}
 
 async function searchItunes(term) {
   const data = await safeJson(
-    `https://itunes.apple.com/search?media=music&entity=song&limit=50&country=${config.itunesCountry}&term=${encodeURIComponent(term)}`,
+    `https://itunes.apple.com/search?media=music&entity=song&limit=50&country=${market()}&term=${enc(term)}`,
   );
   return (data.results || []).map((r) => ({
     source: 'iTunes',
@@ -172,7 +201,7 @@ async function searchItunes(term) {
 }
 
 async function searchDeezer(term) {
-  const data = await safeJson(`https://api.deezer.com/search?limit=25&q=${encodeURIComponent(term)}`);
+  const data = await safeJson(`https://api.deezer.com/search?limit=25&q=${enc(term)}`);
   return (data.data || []).map((r) => ({
     source: 'Deezer',
     id: r.id,
@@ -184,6 +213,246 @@ async function searchDeezer(term) {
     cover: r.album?.cover_xl || null,
   }));
 }
+
+async function enrichDeezer(c) {
+  if (!Number.isInteger(c.id)) return c;
+  const t = await safeJson(`https://api.deezer.com/track/${c.id}`);
+  return { ...c, track: t.track_position, disc: t.disk_number, date: t.release_date || '' };
+}
+
+// ---- catalogues that need a key
+
+// Tidal and Spotify hand out a short-lived token in exchange for the server's
+// key. It is kept in memory until shortly before it runs out.
+const tokens = new Map(); // catalogue id -> { value, until }
+
+async function clientToken(id, url) {
+  const hit = tokens.get(id);
+  if (hit && Date.now() < hit.until) return hit.value;
+  const key = config.keys[id];
+  const data = await safeJson(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${key.id}:${key.secret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  }).catch((e) => {
+    // The key itself was refused: asking again will not help, so the catalogue is rested.
+    if ([400, 401, 403].includes(e?.status)) throw Object.assign(new Error('key refused'), { status: 401, final: true });
+    throw e;
+  });
+  const value = String(data.access_token || '');
+  if (!/^[A-Za-z0-9_.~+/=-]{10,4000}$/.test(value)) throw new Error('no token');
+  const seconds = Math.max(120, Math.min(Number(data.expires_in) || 3600, 86_400));
+  tokens.set(id, { value, until: Date.now() + (seconds - 60) * 1000 });
+  return value;
+}
+
+/** A request signed with a catalogue's token. A token it no longer accepts is thrown away. */
+async function withToken(id, tokenUrl, url, accept = 'application/json') {
+  const token = await clientToken(id, tokenUrl);
+  try {
+    return await safeJson(url, { accept, headers: { Authorization: `Bearer ${token}` } });
+  } catch (e) {
+    if (e?.status === 401) tokens.delete(id);
+    throw e;
+  }
+}
+
+// Tidal: a search gives track ids; the tracks, their albums and artists come
+// with a second request. The track number and the artwork are fetched only
+// for the song that wins (enrichTidal).
+const TIDAL = 'https://openapi.tidal.com/v2';
+const TIDAL_ID = /^\d{1,20}$/;
+const tidalGet = (path) => withToken('tidal', 'https://auth.tidal.com/v1/oauth2/token', `${TIDAL}${path}`, 'application/vnd.api+json');
+
+/** "PT3M21S" -> 201 */
+function isoSeconds(v) {
+  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/.exec(String(v || ''));
+  return m ? Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0) || null : null;
+}
+
+async function searchTidal(term) {
+  const cc = `countryCode=${market()}`;
+  const found = await tidalGet(`/searchResults/${enc(term)}/relationships/tracks?${cc}&include=tracks`);
+  const ids = (Array.isArray(found.data) ? found.data : [])
+    .map((r) => String(r?.id ?? ''))
+    .filter((id) => TIDAL_ID.test(id))
+    .slice(0, 12);
+  if (!ids.length) return [];
+  const doc = await tidalGet(`/tracks?${cc}&${ids.map((id) => `filter%5Bid%5D=${id}`).join('&')}&include=albums&include=artists`);
+  const byKey = new Map((Array.isArray(doc.included) ? doc.included : []).map((r) => [`${r?.type}/${r?.id}`, r?.attributes || {}]));
+  const related = (t, kind) =>
+    (Array.isArray(t.relationships?.[kind]?.data) ? t.relationships[kind].data : []).map((x) => ({ ...byKey.get(`${kind}/${x?.id}`), id: String(x?.id ?? '') }));
+  return (Array.isArray(doc.data) ? doc.data : []).map((t) => {
+    const a = t.attributes || {};
+    const artist = related(t, 'artists').map((x) => x.name).find(Boolean);
+    const album = related(t, 'albums')[0] || {};
+    const version = String(a.version || '');
+    return {
+      source: 'Tidal',
+      id: String(t.id ?? ''),
+      albumId: TIDAL_ID.test(album.id || '') ? album.id : null,
+      title: version && !String(a.title).toLowerCase().includes(version.toLowerCase()) ? `${a.title} (${version})` : a.title,
+      artist,
+      album: album.title,
+      isSingle: (album.albumType || album.type) === 'SINGLE',
+      albumArtist: artist,
+      date: String(album.releaseDate || ''),
+      trackTotal: album.numberOfItems,
+      discTotal: album.numberOfVolumes,
+      genre: '',
+      duration: isoSeconds(a.duration),
+      cover: null,
+    };
+  });
+}
+
+async function enrichTidal(c) {
+  if (!c.albumId || !TIDAL_ID.test(c.id)) return c;
+  const cc = `countryCode=${market()}`;
+  const out = { ...c };
+  const album = await tidalGet(`/albums/${c.albumId}?${cc}&include=coverArt&include=genres`).catch(() => null);
+  const included = Array.isArray(album?.included) ? album.included : [];
+  const files = included
+    .filter((r) => r?.type === 'artworks')
+    .flatMap((r) => (Array.isArray(r.attributes?.files) ? r.attributes.files : []))
+    .filter((f) => typeof f?.href === 'string')
+    .sort((a, b) => (b.meta?.width || 0) - (a.meta?.width || 0));
+  // The largest picture that is not needlessly big; failing that, the smallest of the big ones.
+  const picture = files.find((f) => (f.meta?.width || 0) <= 1600) || files.at(-1);
+  if (picture) out.cover = picture.href;
+  const genre = included.find((r) => r?.type === 'genres')?.attributes?.genreName;
+  if (genre) out.genre = String(genre);
+
+  // Where the song sits on its album: walk the album's list until it turns up.
+  let path = `/albums/${c.albumId}/relationships/items?${cc}`;
+  for (let page = 0; page < 4 && path; page++) {
+    const doc = await tidalGet(path).catch(() => null);
+    const me = (Array.isArray(doc?.data) ? doc.data : []).find((r) => String(r?.id) === c.id);
+    if (me) {
+      out.track = me.meta?.trackNumber;
+      out.disc = me.meta?.volumeNumber;
+      break;
+    }
+    // Only ever a path on the same service, never an address taken from the answer.
+    const next = String(doc?.links?.next || '');
+    path = /^\/[^/]/.test(next) ? next.replace(/^\/v2(?=\/)/, '') : null;
+  }
+  return out;
+}
+
+async function searchSpotify(term) {
+  const data = await withToken(
+    'spotify',
+    'https://accounts.spotify.com/api/token',
+    `https://api.spotify.com/v1/search?type=track&limit=10&market=${market()}&q=${enc(term)}`,
+  );
+  return (Array.isArray(data.tracks?.items) ? data.tracks.items : []).filter(Boolean).map((r) => {
+    const album = r.album || {};
+    const images = (Array.isArray(album.images) ? album.images : [])
+      .filter((i) => typeof i?.url === 'string')
+      .sort((a, b) => (b.width || 0) - (a.width || 0));
+    const artist = r.artists?.[0]?.name;
+    return {
+      source: 'Spotify',
+      title: r.name,
+      artist,
+      album: album.name,
+      isSingle: album.album_type === 'single' && !(album.total_tracks > 3),
+      albumArtist: album.artists?.[0]?.name || artist,
+      date: String(album.release_date || ''),
+      track: r.track_number,
+      trackTotal: album.total_tracks,
+      disc: r.disc_number,
+      genre: '',
+      duration: r.duration_ms ? r.duration_ms / 1000 : null,
+      cover: images[0]?.url || null,
+    };
+  });
+}
+
+// Discogs lists releases, not songs: a search gives the releases a song is
+// on, and the two most promising are opened to read their track lists.
+const discogsName = (list) => String((Array.isArray(list) ? list[0] : null)?.name || '').replace(/\s\(\d+\)$/, '');
+const clock = (v) => {
+  const m = /^(?:(\d{1,2}):)?(\d{1,3}):(\d{2})$/.exec(String(v || '').trim());
+  return m ? Number(m[1] || 0) * 3600 + Number(m[2]) * 60 + Number(m[3]) || null : null;
+};
+
+async function searchDiscogs({ artist, title }) {
+  const auth = { headers: { Authorization: `Discogs token=${config.keys.discogs.token}` } };
+  const data = await safeJson(`https://api.discogs.com/database/search?type=release&per_page=10&artist=${enc(artist)}&track=${enc(title)}`, auth);
+  const formats = (r) => (Array.isArray(r.format) ? r.format.join(' ') : '');
+  const rank = (r) => (/\bAlbum\b/.test(formats(r)) ? 0 : 2) + (/Compilation|Unofficial|Promo/.test(formats(r)) ? 3 : 0) + (parseInt(r.year, 10) || 9999) / 100000;
+  const picks = (Array.isArray(data.results) ? data.results : [])
+    .filter((r) => Number.isInteger(r?.id) && r.id > 0)
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, 2);
+  const out = [];
+  for (const pick of picks) {
+    const rel = await safeJson(`https://api.discogs.com/releases/${pick.id}`, auth).catch(() => null);
+    if (!rel) continue;
+    const albumArtist = discogsName(rel.artists);
+    const kinds = (Array.isArray(rel.formats) ? rel.formats : []).flatMap((f) => (Array.isArray(f?.descriptions) ? f.descriptions : []));
+    const picture = (Array.isArray(rel.images) ? rel.images : []).find((i) => typeof i?.uri === 'string');
+    const tracks = (Array.isArray(rel.tracklist) ? rel.tracklist : []).filter((t) => t?.type_ === 'track');
+    tracks.forEach((t, i) =>
+      out.push({
+        source: 'Discogs',
+        title: t.title,
+        artist: discogsName(t.artists) || albumArtist,
+        album: rel.title,
+        isSingle: kinds.includes('Single'),
+        albumArtist,
+        date: String(rel.released || rel.year || '').replace(/-00.*$/, ''),
+        track: i + 1,
+        trackTotal: tracks.length,
+        genre: (Array.isArray(rel.styles) && rel.styles[0]) || (Array.isArray(rel.genres) && rel.genres[0]) || '',
+        duration: clock(t.duration),
+        cover: picture?.uri || null,
+      }),
+    );
+  }
+  return out;
+}
+
+// Last.fm knows one song at a time. Its tags are written by listeners, so the
+// ones that say nothing about the music are skipped; its pictures are too
+// small to embed and are not used.
+const NOT_A_GENRE = /^(?:seen live|live|favou?rites?|favou?rite songs?|awesome|cool|love|loved|beautiful|my music|spotify|albums i own|under \d+ listeners|\d+s?|.{0,1}|.{31,})$/i;
+
+async function searchLastfm({ artist, title }) {
+  let data;
+  try {
+    data = await safeJson(
+      `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&format=json&autocorrect=1&api_key=${config.keys.lastfm.key}&artist=${enc(artist)}&track=${enc(title)}`,
+    );
+  } catch (e) {
+    if (e?.status === 404) return []; // it does not know the song
+    throw e;
+  }
+  const t = data?.track;
+  if (!t || typeof t !== 'object') return [];
+  const tag = (Array.isArray(t.toptags?.tag) ? t.toptags.tag : []).map((x) => String(x?.name || '')).find((name) => !NOT_A_GENRE.test(name));
+  return [
+    {
+      source: 'Last.fm',
+      title: t.name,
+      artist: t.artist?.name,
+      album: t.album?.title || '',
+      albumArtist: t.album?.artist || t.artist?.name,
+      date: '',
+      track: parseInt(t.album?.['@attr']?.position, 10) || null,
+      genre: tag ? tag.replace(/(^|[\s-])\p{L}/gu, (ch) => ch.toUpperCase()) : '',
+      duration: Number(t.duration) > 0 ? Number(t.duration) / 1000 : null,
+      cover: null,
+    },
+  ];
+}
+
+// ---- MusicBrainz
 
 // MusicBrainz is an open database, so it also covers songs the stores do not
 // list. It allows one request per second: calls are spaced through this gate.
@@ -232,7 +501,7 @@ const credit = (list) => (list || []).map((a) => `${a.name}${a.joinphrase || ''}
 
 async function searchMusicBrainz(query) {
   await mbSlot();
-  const data = await safeJson(`https://musicbrainz.org/ws/2/recording?fmt=json&limit=40&query=${encodeURIComponent(query)}`);
+  const data = await safeJson(`https://musicbrainz.org/ws/2/recording?fmt=json&limit=40&query=${enc(query)}`);
   const out = [];
   for (const r of data.recordings || []) {
     const rel = pickRelease(r.releases);
@@ -258,35 +527,61 @@ async function searchMusicBrainz(query) {
       duration: r.length ? r.length / 1000 : null,
       live: secondary.includes('Live'),
       rgid,
+      // The Cover Art Archive has a picture for many albums, not for all:
+      // whether this one exists is only known when it is fetched.
       cover: rgid ? `https://coverartarchive.org/release-group/${rgid}/front-1200` : null,
+      coverUnsure: true,
     });
   }
   return out;
 }
 
-const PROVIDERS = [
-  { name: 'iTunes', search: searchItunes, queries: searchTerms },
-  { name: 'Deezer', search: searchDeezer, queries: searchTerms },
-  { name: 'MusicBrainz', search: searchMusicBrainz, queries: mbQueries },
-];
+async function enrichMusicBrainz(c) {
+  if (!c.rgid) return c;
+  await mbSlot();
+  const rg = await safeJson(`https://musicbrainz.org/ws/2/release-group/${c.rgid}?inc=genres&fmt=json`);
+  const top = (rg.genres || []).sort((a, b) => b.count - a.count)[0];
+  return top ? { ...c, genre: String(top.name).replace(/(^|\s)\p{L}/gu, (ch) => ch.toUpperCase()) } : c;
+}
+
+// ---- the list
+
+// `gives`: what a catalogue can add to a song another one identified.
+// `label`: its name as the Privacy & Policy page gives it.
+const CATALOGUES = {
+  itunes: { name: 'iTunes', label: 'Apple iTunes Search', search: searchItunes, queries: searchTerms, gives: ['album', 'date', 'track', 'genre', 'cover'] },
+  deezer: { name: 'Deezer', label: 'Deezer', search: searchDeezer, queries: searchTerms, enrich: enrichDeezer, gives: ['album', 'date', 'track', 'cover'] },
+  tidal: { name: 'Tidal', label: 'Tidal', search: searchTidal, queries: searchTerms, enrich: enrichTidal, gives: ['album', 'date', 'track', 'genre', 'cover'] },
+  spotify: { name: 'Spotify', label: 'Spotify', search: searchSpotify, queries: searchTerms, gives: ['album', 'date', 'track', 'cover'] },
+  musicbrainz: { name: 'MusicBrainz', label: 'MusicBrainz', search: searchMusicBrainz, queries: mbQueries, enrich: enrichMusicBrainz, gives: ['album', 'date', 'track', 'genre', 'cover'] },
+  discogs: { name: 'Discogs', label: 'Discogs', search: searchDiscogs, queries: pairQueries, gives: ['album', 'date', 'track', 'genre', 'cover'] },
+  lastfm: { name: 'Last.fm', label: 'Last.fm', search: searchLastfm, queries: pairQueries, gives: ['album', 'genre'] },
+};
+
+/** The catalogues this server asks, in order (iTunes first unless CATALOGUES says otherwise). */
+const active = () => (config.lookup ? config.catalogues.map((id) => CATALOGUES[id]).filter(Boolean) : []);
+
+/** Their names, for the Privacy & Policy page. */
+export const catalogueLabels = () => active().map((c) => c.label);
+
+// A catalogue that refuses the server (a wrong key, too many requests) is left
+// alone for a while instead of being asked again for every song.
+const resting = new Map(); // catalogue name -> when it may be asked again
+
+function rest(catalogue, e) {
+  const ms = e?.status === 401 ? 15 * 60_000 : e?.status === 403 || e?.status === 429 ? 3 * 60_000 : 0;
+  if (ms) resting.set(catalogue.name, Date.now() + ms);
+}
+const isResting = (catalogue) => (resting.get(catalogue.name) || 0) > Date.now();
 
 /** Fill in what the winning candidate's search result did not include. */
-async function enrich(c) {
+async function enrich(catalogue, c) {
+  if (!catalogue.enrich) return c;
   try {
-    if (c.source === 'MusicBrainz' && c.rgid) {
-      await mbSlot();
-      const rg = await safeJson(`https://musicbrainz.org/ws/2/release-group/${c.rgid}?inc=genres&fmt=json`);
-      const top = (rg.genres || []).sort((a, b) => b.count - a.count)[0];
-      if (top) return { ...c, genre: String(top.name).replace(/(^|\s)\p{L}/gu, (ch) => ch.toUpperCase()) };
-    }
-    if (c.source === 'Deezer' && Number.isInteger(c.id)) {
-      const t = await safeJson(`https://api.deezer.com/track/${c.id}`);
-      return { ...c, track: t.track_position, disc: t.disk_number, date: t.release_date || '' };
-    }
+    return await catalogue.enrich(c);
   } catch {
-    /* optional extras */
+    return c; // optional extras
   }
-  return c;
 }
 
 // ------------------------------------------------------------ scoring
@@ -318,10 +613,12 @@ function score(c, hyps, info) {
   return s;
 }
 
+/** One more try after a failure that may pass. A plain "no" from the catalogue is not asked twice. */
 async function withRetry(fn) {
   try {
     return await fn();
-  } catch {
+  } catch (e) {
+    if (e?.final || [400, 403, 404, 429].includes(e?.status)) throw e;
     await new Promise((r) => setTimeout(r, 1500));
     return fn();
   }
@@ -329,11 +626,84 @@ async function withRetry(fn) {
 
 const int = (v) => (Number.isInteger(v) && v > 0 && v < 1000 ? v : null);
 
+// ------------------------------------------------------------ filling gaps
+//
+// The catalogue that identified the song does not always know everything
+// about it: Deezer has no genre, MusicBrainz often no picture. What is missing
+// is asked of the catalogues after it, at most two of them, one search each.
+
+const sameKind = (a, b) => {
+  const x = versions(a);
+  const y = versions(b);
+  return x.size === y.size && [...x].every((v) => y.has(v));
+};
+
+/** Is candidate `c` the song `song`, as far as names and length can tell? */
+function sameSong(c, song) {
+  if (sim(c.title, song.title) < 0.8 || sim(c.artist, song.artist) < 0.6) return false;
+  if (!sameKind(c.title, song.title) || !!c.live !== !!song.live) return false;
+  if (KNOCKOFF.test(`${c.title} ${c.album} ${c.artist}`) && !KNOCKOFF.test(`${song.title} ${song.album}`)) return false;
+  return !(c.duration && song.duration) || Math.abs(c.duration - song.duration) <= 7;
+}
+
+const gaps = (song) =>
+  ['album', 'date', 'track', 'genre'].filter((k) => !song[k]).concat(!song.cover || song.coverUnsure ? ['cover'] : []);
+
+/**
+ * @param {object} song the winning candidate; filled in place
+ * @param {object} winner the catalogue it came from
+ * @param {Map<string, object[]>} seen what the catalogues asked so far answered
+ * @returns {Promise<{url: string, label: string}[]>} more artwork to try, should the winner's fail
+ */
+async function fillGaps(song, winner, seen) {
+  const spare = [];
+  let need = new Set(gaps(song));
+  let asked = 0;
+  for (const catalogue of active()) {
+    if (!need.size || asked >= 2) break;
+    if (catalogue === winner || !catalogue.gives.some((k) => need.has(k))) continue;
+    let list = seen.get(catalogue.name);
+    if (!list) {
+      if (isResting(catalogue)) continue;
+      // The plainest form of the search: the winner's own names, featured artists left out.
+      const query = catalogue.queries([{ artist: song.artist, title: song.title, trusted: true }]).at(-1);
+      if (!query) continue;
+      asked++;
+      try {
+        list = await catalogue.search(query);
+      } catch (e) {
+        rest(catalogue, e);
+        continue;
+      }
+    }
+    let other = list.filter((c) => sameSong(c, song)).sort((a, b) => sim(b.album, song.album) - sim(a.album, song.album))[0];
+    if (!other) continue;
+    other = await enrich(catalogue, other);
+
+    if (!song.genre && other.genre) song.genre = other.genre;
+    // The rest belongs to one particular album, so it is taken only from the same one.
+    const sameAlbum = song.album ? sim(other.album, song.album) >= 0.75 : !!other.album;
+    if (sameAlbum) {
+      if (!song.album) Object.assign(song, { album: other.album, albumArtist: song.albumArtist || other.albumArtist });
+      if (!song.date && other.date) song.date = other.date;
+      if (!song.track && other.track) Object.assign(song, { track: other.track, trackTotal: other.trackTotal, disc: other.disc, discTotal: other.discTotal });
+      if (other.cover && typeof other.cover === 'string') {
+        if (!song.cover) Object.assign(song, { cover: other.cover, coverFrom: other.source, coverUnsure: other.coverUnsure });
+        else if (song.coverUnsure && !other.coverUnsure) spare.push({ url: other.cover, label: `${other.source} album art` });
+      }
+    }
+    need = new Set(gaps(song).filter((k) => !(k === 'cover' && spare.length)));
+  }
+  return spare;
+}
+
 // ------------------------------------------------------------ entry point
 
 /**
  * @param {object} info yt-dlp info json for one video
- * @returns {Promise<{source: string, confidence: number|null, tags: object, coverUrl: string|null, duration: number|null, lookupFailed: boolean}>}
+ * @returns {Promise<{source: string, confidence: number|null, tags: object, coverUrl: string|null,
+ *   covers: {url: string, label: string}[], duration: number|null, lookupFailed: boolean}>}
+ *   `covers` is the artwork to try, best first (`coverUrl` is the first of them);
  *   `duration` is the catalogue's length of the song in seconds, when it has one
  */
 export async function resolveMetadata(info) {
@@ -343,6 +713,7 @@ export async function resolveMetadata(info) {
     source: 'YouTube',
     confidence: null,
     coverUrl: null,
+    covers: [],
     duration: null,
     lookupFailed: false,
     tags: {
@@ -358,19 +729,24 @@ export async function resolveMetadata(info) {
       discTotal: null,
     },
   };
-  if (!config.lookup) return fallback;
 
-  for (const provider of PROVIDERS) {
+  const seen = new Map(); // catalogue name -> every candidate it answered with
+  for (const catalogue of active()) {
+    if (isResting(catalogue)) continue;
     let best = null;
-    for (const term of provider.queries(hyps)) {
+    for (const query of catalogue.queries(hyps)) {
       let candidates;
       try {
-        candidates = await withRetry(() => provider.search(term));
+        candidates = await withRetry(() => catalogue.search(query));
       } catch (e) {
         fallback.lookupFailed = true;
-        console.warn(`[metadata] ${provider.name} lookup failed: ${e.cause?.code || e.message}`);
+        rest(catalogue, e);
+        // The reason only: an address could hold a key, a message could hold a song title.
+        console.warn(`[metadata] ${catalogue.name} lookup failed: ${e?.status ? `HTTP ${e.status}` : e?.cause?.code || e?.name || 'error'}`);
+        if (isResting(catalogue)) break;
         continue;
       }
+      seen.set(catalogue.name, [...(seen.get(catalogue.name) || []), ...candidates]);
       for (const c of candidates) {
         const s = score(c, hyps, info);
         if (s >= MIN_SCORE && (!best || s > best.s)) best = { c, s };
@@ -378,11 +754,17 @@ export async function resolveMetadata(info) {
       if (best && best.s >= 0.9) break;
     }
     if (!best) continue;
-    const c = await enrich(best.c);
+
+    const c = { ...(await enrich(catalogue, best.c)) };
+    const spare = await fillGaps(c, catalogue, seen).catch(() => []);
+    const covers = [];
+    if (typeof c.cover === 'string') covers.push({ url: c.cover, label: `${c.coverFrom || c.source} album art` });
+    covers.push(...spare);
     return {
       source: c.source,
       confidence: Math.min(1, Math.round(best.s * 100) / 100),
-      coverUrl: typeof c.cover === 'string' ? c.cover : null,
+      coverUrl: covers[0]?.url || null,
+      covers,
       duration: Number(c.duration) > 0 ? Number(c.duration) : null,
       lookupFailed: false,
       tags: {

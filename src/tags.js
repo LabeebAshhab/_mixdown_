@@ -11,12 +11,40 @@ import { pipeline } from 'node:stream/promises';
 
 const esc = (s) => String(s).replace(/([=;#\\\n])/g, '\\$1');
 
+// ------------------------------------------------------------ tags carried over
+//
+// When a visitor's own file has its tags edited, the tags the editor does not
+// show are kept: these ones, read from the file as plain text and written
+// again. Nothing is copied over as bytes. Each has a name in the two ways of
+// tagging this app writes; a container that has no place for one drops it.
+export const KEPT = {
+  composer: { id3: 'TCOM', field: 'COMPOSER', mp4: 'composer' },
+  comment: { id3: 'COMM', field: 'COMMENT', mp4: 'comment' },
+  copyright: { id3: 'TCOP', field: 'COPYRIGHT', mp4: 'copyright' },
+  grouping: { id3: 'TIT1', field: 'GROUPING', mp4: 'grouping' },
+  compilation: { id3: 'TCMP', field: 'COMPILATION', mp4: 'compilation' },
+  bpm: { id3: 'TBPM', field: 'BPM' },
+  label: { id3: 'TPUB', field: 'LABEL' },
+  isrc: { id3: 'TSRC', field: 'ISRC' },
+  subtitle: { id3: 'TIT3', field: 'SUBTITLE' },
+  lyricist: { id3: 'TEXT', field: 'LYRICIST' },
+  conductor: { id3: 'TPE3', field: 'CONDUCTOR' },
+  remixer: { id3: 'TPE4', field: 'REMIXER' },
+  language: { id3: 'TLAN', field: 'LANGUAGE' },
+  key: { id3: 'TKEY', field: 'KEY' },
+  media: { id3: 'TMED', field: 'MEDIA' },
+  mood: { field: 'MOOD' },
+};
+export const KEPT_KEYS = Object.keys(KEPT);
+
 /**
  * @param {object} t neutral tags
  * @param {'split'|'slash'} numbering  Vorbis keeps totals in their own fields
- * @param {{lyrics?: string, pictureBlock?: string}} [extra]
+ * @param {{lyrics?: string, pictureBlock?: string, kept?: object, mp4?: boolean}} [extra]
+ *   `kept`: tags carried over from a visitor's own file (see KEPT); `mp4`: write
+ *   only the ones an MP4 file has a place for
  */
-export function ffmetadata(t, numbering, { lyrics, pictureBlock } = {}) {
+export function ffmetadata(t, numbering, { lyrics, pictureBlock, kept, mp4 } = {}) {
   const pairs = [
     ['title', t.title],
     ['artist', t.artist],
@@ -32,6 +60,10 @@ export function ffmetadata(t, numbering, { lyrics, pictureBlock } = {}) {
     pairs.push(['disc', t.disc && t.discTotal ? `${t.disc}/${t.discTotal}` : t.disc]);
   }
   if (lyrics) pairs.push(['lyrics', lyrics]);
+  for (const [key, value] of Object.entries(kept || {})) {
+    const name = Object.hasOwn(KEPT, key) ? (mp4 ? KEPT[key].mp4 : KEPT[key].field) : null;
+    if (name) pairs.push([name, value]);
+  }
   if (pictureBlock) pairs.push(['METADATA_BLOCK_PICTURE', pictureBlock]);
   const lines = [';FFMETADATA1'];
   for (const [k, v] of pairs) if (v !== null && v !== undefined && v !== '') lines.push(`${k}=${esc(v)}`);
@@ -118,10 +150,11 @@ function syncedFrame(lrc) {
 
 /**
  * @param {object} t neutral tags
- * @param {{lyrics?: string, synced?: string, cover?: Buffer}} [extra] `synced` is LRC text
+ * @param {{lyrics?: string, synced?: string, cover?: Buffer, kept?: object}} [extra] `synced` is LRC text;
+ *   `kept`: tags carried over from a visitor's own file (see KEPT)
  * @returns {Buffer} a complete ID3v2.3 tag
  */
-export function buildId3(t, { lyrics, synced, cover } = {}) {
+export function buildId3(t, { lyrics, synced, cover, kept } = {}) {
   const frames = [];
   const add = (id, v) => {
     if (v !== null && v !== undefined && v !== '') frames.push(textFrame(id, v));
@@ -134,6 +167,12 @@ export function buildId3(t, { lyrics, synced, cover } = {}) {
   add('TRCK', t.track && t.trackTotal ? `${t.track}/${t.trackTotal}` : t.track);
   add('TPOS', t.disc && t.discTotal ? `${t.disc}/${t.discTotal}` : t.disc);
   add('TCON', t.genre);
+  for (const [key, value] of Object.entries(kept || {})) {
+    const id = Object.hasOwn(KEPT, key) ? KEPT[key].id3 : null;
+    if (!id || value === null || value === undefined || value === '') continue;
+    if (id === 'COMM') frames.push(frame('COMM', Buffer.concat([Buffer.from([1]), Buffer.from('eng', 'latin1'), utf16(''), NUL16, utf16(value)])));
+    else add(id, value);
+  }
   if (lyrics) {
     frames.push(frame('USLT', Buffer.concat([Buffer.from([1]), Buffer.from('eng', 'latin1'), utf16(''), NUL16, utf16(lyrics)])));
   }

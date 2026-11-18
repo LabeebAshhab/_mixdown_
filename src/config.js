@@ -41,6 +41,48 @@ function text(name, def, max = 80) {
 }
 
 /**
+ * A key for one of the catalogues that need one. It travels in a request
+ * header or address, so only the characters such keys are made of are let
+ * through; anything else counts as "not set".
+ */
+function secret(name) {
+  const v = (process.env[name] || '').trim();
+  return /^[A-Za-z0-9_.~=+/-]{8,200}$/.test(v) ? v : '';
+}
+
+// The catalogues a song can be looked up in, and the settings each one needs.
+// The first three are open; the others answer only with a key of the server's own.
+const keys = {
+  tidal: { id: secret('TIDAL_CLIENT_ID'), secret: secret('TIDAL_CLIENT_SECRET') },
+  spotify: { id: secret('SPOTIFY_CLIENT_ID'), secret: secret('SPOTIFY_CLIENT_SECRET') },
+  discogs: { token: secret('DISCOGS_TOKEN') },
+  lastfm: { key: secret('LASTFM_API_KEY') },
+};
+const CATALOGUE_READY = {
+  itunes: true,
+  deezer: true,
+  tidal: !!(keys.tidal.id && keys.tidal.secret),
+  spotify: !!(keys.spotify.id && keys.spotify.secret),
+  musicbrainz: true,
+  discogs: !!keys.discogs.token,
+  lastfm: !!keys.lastfm.key,
+};
+
+/**
+ * The catalogues to ask, in order. CATALOGUES may reorder them or leave some
+ * out; unknown words are dropped, and one without its key is never asked.
+ */
+function catalogueOrder() {
+  const all = Object.keys(CATALOGUE_READY);
+  const wanted = String(process.env.CATALOGUES || '')
+    .toLowerCase()
+    .split(/[\s,;]+/)
+    .map((w) => w.replace(/[^a-z]/g, ''))
+    .filter((w, i, list) => all.includes(w) && list.indexOf(w) === i);
+  return (wanted.length ? wanted : all).filter((id) => CATALOGUE_READY[id]);
+}
+
+/**
  * A list of the inspector's file kinds ("mp3, flac wav"). Unknown words are
  * dropped; a list with nothing usable in it falls back to every kind.
  */
@@ -78,7 +120,9 @@ export const config = {
   totalBytes: Math.round(num('TOTAL_STORAGE_GB', 20, 0.1, 100000) * GIB), // whole server
   fileTtlMs: num('FILE_TTL_MINUTES', 15, 1, 1440) * 60_000,
   maxSourceBytes: num('MAX_SOURCE_MB', 500, 1, 100000) * MIB,
-  maxUploadBytes: num('MAX_UPLOAD_MB', 100, 1, 10000) * MIB,
+  maxUploadBytes: num('MAX_UPLOAD_MB', 678, 1, 10000) * MIB, // largest file the inspector takes
+  // A file is sent in pieces of this size, so that it also passes a proxy that caps one request (Cloudflare: 100 MB).
+  uploadChunkBytes: num('UPLOAD_CHUNK_MB', 8, 1, 90) * MIB,
   maxCoverBytes: num('MAX_COVER_MB', 10, 1, 50) * MIB, // an image a visitor uploads as artwork
 
   // Work limits
@@ -92,14 +136,16 @@ export const config = {
     lookup: 60_000,
     download: num('DOWNLOAD_TIMEOUT_SEC', 600, 10, 7200) * 1000,
     convert: num('CONVERT_TIMEOUT_SEC', 900, 10, 7200) * 1000,
-    upload: num('UPLOAD_TIMEOUT_SEC', 120, 5, 3600) * 1000, // an inspector upload has to arrive within this
+    upload: num('UPLOAD_TIMEOUT_SEC', 120, 5, 3600) * 1000, // each piece of an inspector upload has to arrive within this
+    uploadTotal: num('UPLOAD_TOTAL_MINUTES', 30, 1, 240) * 60_000, // and the whole file within this
   },
 
   // Requests per minute, per IP address
   rate: {
     global: num('RATE_GLOBAL_PER_MIN', 300, 10, 100000),
     convert: num('RATE_CONVERT_PER_MIN', 5, 1, 1000),
-    inspect: num('RATE_INSPECT_PER_MIN', 10, 1, 1000),
+    inspect: num('RATE_INSPECT_PER_MIN', 10, 1, 1000), // files offered to the inspector
+    piece: num('RATE_UPLOAD_PIECES_PER_MIN', 240, 10, 10000), // pieces of those files
     search: num('RATE_SEARCH_PER_MIN', 10, 1, 1000),
     edit: num('RATE_EDIT_PER_MIN', 20, 1, 1000),
     login: 5,
@@ -109,6 +155,8 @@ export const config = {
   search: (process.env.SEARCH || 'on').toLowerCase() !== 'off', // search by song name
   inspect: (process.env.INSPECT || 'on').toLowerCase() !== 'off', // the metadata inspector (file uploads)
   inspectTypes: fileKinds('INSPECT_TYPES'), // kinds of file it accepts, judged by their bytes
+  // on = an inspected file may be kept to have its tags edited and be downloaded again; off = read and deleted, as before
+  inspectEdit: (process.env.INSPECT_EDIT || 'on').toLowerCase() !== 'off',
   online: (process.env.ONLINE_COUNT || 'on').toLowerCase() !== 'off', // "people here now" number in the header
   preview: (process.env.PREVIEW || 'on').toLowerCase() !== 'off', // in-page player
   previewSeconds: num('PREVIEW_MINUTES', 10, 1, 60) * 60, // longest preview kept per track
@@ -119,6 +167,9 @@ export const config = {
   // Metadata
   lookup: (process.env.METADATA_LOOKUP || 'on').toLowerCase() !== 'off',
   lyrics: (process.env.LYRICS || 'on').toLowerCase() !== 'off',
+  catalogues: catalogueOrder(), // ids, in the order they are asked
+  keys, // never logged, never sent to a page
+  // The country whose stores are searched (iTunes, Tidal, Spotify).
   itunesCountry: /^[A-Za-z]{2}$/.test(process.env.ITUNES_COUNTRY || '') ? process.env.ITUNES_COUNTRY.toUpperCase() : 'US',
   userAgent: text('LOOKUP_USER_AGENT', 'mixdown/2.0 (self-hosted)', 120),
 

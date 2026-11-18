@@ -130,12 +130,17 @@
       <div class="tab-panel scroll" id="panel-inspect" role="tabpanel" hidden>
         <div class="panel">
           <h2 data-i18n="inspectTitle">What's inside this file?</h2>
-          <p class="muted" id="inspect-text">Drop an audio file and I'll read its tags, artwork and audio details. It's read once and deleted straight away.</p>
+          <p class="muted" id="inspect-text">Drop an audio file and I'll read its tags, artwork and audio details.</p>
+          <div class="keep" id="row-keep">
+            <label class="switch"><input type="checkbox" id="opt-keep"><span class="track"></span><span data-i18n="optKeep">Let me correct its tags afterwards</span></label>
+            <p class="keep-hint" id="keep-hint"></p>
+          </div>
           <div class="drop" id="drop" tabindex="0" role="button">
             <svg class="icon big"><use href="#i-up"/></svg>
             <span data-i18n="dropText">Drop a file here, or click to choose one</span>
           </div>
           <input type="file" id="file" hidden>
+          <div id="inspect-job"></div>
           <div id="inspect-out"></div>
         </div>
       </div>

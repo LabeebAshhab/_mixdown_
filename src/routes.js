@@ -4,7 +4,7 @@ import express from 'express';
 import { z } from 'zod';
 import { config } from './config.js';
 import { FORMAT_IDS, publicFormats, resolveOptions } from './formats.js';
-import { acceptedTypes, checkUpload, inspectUpload, tooLarge } from './inspect.js';
+import { acceptedTypes, cancelUpload, checkUpload, receivePiece, startUpload, tooLarge } from './inspect.js';
 import { collectTrack, createJob, jobs, publicJob, removeJob, usageFor, workingSessions } from './jobs.js';
 import { imageDemuxer, lookupSong, retagTrack, searchSongs, uploadCover } from './pipeline.js';
 import { checkIn, onlineCount } from './presence.js';
@@ -57,6 +57,9 @@ const tagBody = z
   .strict();
 const lookupBody = z.object({ title: z.string().min(1).max(200), artist: z.string().min(1).max(200) }).strict();
 const idParam = z.string().uuid();
+// The inspector: how large the file is and whether it is to be kept for editing; then where each piece belongs.
+const uploadBody = z.object({ size: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), keep: z.boolean().default(false) }).strict();
+const offsetParam = z.string().regex(/^\d{1,15}$/).transform(Number);
 const indexParam = z.coerce.number().int().min(0).max(5000);
 
 const SITE_NAMES = Object.values(SITES)
@@ -146,7 +149,7 @@ export function apiRouter({ ready }) {
       credits: config.credits,
       formats: publicFormats(),
       sites: Object.values(SITES).map((s) => s.label),
-      features: { search: config.search, preview: config.preview, inspect: config.inspect, online: config.online },
+      features: { search: config.search, preview: config.preview, inspect: config.inspect, inspectEdit: config.inspect && config.inspectEdit, online: config.online },
       inspectTypes: config.inspect ? acceptedTypes() : [],
       limits: {
         quotaBytes: config.quotaBytes,
@@ -360,11 +363,11 @@ export function apiRouter({ ready }) {
     const found = await lookupSong({ title, artist, duration: track.meta?.duration });
     if (found?.failed) throw new PublicError('The catalogues could not be reached. Try again in a moment.', 502);
     if (!found) throw new PublicError('No catalogue has a good match for that title and artist.', 404);
-    track.suggest = found.coverUrl ? { url: found.coverUrl, label: `${found.source} album art` } : null;
+    track.suggest = found.covers.length ? found.covers : null;
     const t = found.tags;
     res.json({
       source: found.source,
-      cover: !!found.coverUrl,
+      cover: found.covers.length > 0,
       tags: {
         title: t.title,
         artist: t.artist,
@@ -395,8 +398,8 @@ export function apiRouter({ ready }) {
         trackTotal: body.track ? body.trackTotal : null,
         genre: cleanText(body.genre, 60),
       };
-      const cover = body.suggestedCover && track.suggest ? track.suggest : undefined;
-      await retagTrack(j, track, index, { tags, cover });
+      const covers = body.suggestedCover && track.suggest ? track.suggest : undefined;
+      await retagTrack(j, track, index, { tags, covers });
       track.suggest = null;
     });
     res.json(publicJob(job));
@@ -420,11 +423,29 @@ export function apiRouter({ ready }) {
     res.json(publicJob(job));
   }));
 
-  // Metadata inspector. Everything that protects the server from a hostile
-  // upload is in src/inspect.js.
-  r.post('/inspect', rateLimit(config.rate.inspect), wrap(async (req, res) => {
-    res.json(await inspectUpload(req));
+  // Metadata inspector. A file comes in three steps: its size is announced,
+  // it is sent in pieces, and the answer to the last piece describes it.
+  // Everything that protects the server from a hostile upload is in
+  // src/inspect.js.
+  r.post('/inspect', rateLimit(config.rate.inspect), json, wrap(async (req, res) => {
+    res.status(201).json(await startUpload(req, parse(uploadBody, req.body)));
   }));
+  r.put('/inspect/:id', rateLimit(config.rate.piece), wrap(async (req, res) => {
+    res.json(await receivePiece(req, parse(idParam, req.params.id), parse(offsetParam, req.query.at)));
+  }));
+  r.delete('/inspect/:id', wrap(async (req, res) => {
+    await cancelUpload(req, parse(idParam, req.params.id));
+    res.status(204).end();
+  }));
+
+  // The full description of a file kept for editing: every tag as stored. It
+  // is read again each time the file is written, and the job list says when.
+  r.get('/jobs/:id/report', (req, res) => {
+    const job = ownedJob(req);
+    const report = job.kind === 'upload' ? job.tracks[0]?.report : null;
+    if (!report) throw new PublicError('That item is gone.', 404);
+    res.json({ rev: job.rev, report });
+  });
 
   r.use((_req, res) => res.status(404).json({ error: 'Not found.' }));
   return r;
